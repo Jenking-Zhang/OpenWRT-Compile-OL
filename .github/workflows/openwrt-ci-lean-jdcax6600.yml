@@ -1,0 +1,377 @@
+# 
+# <https://github.com/KFERMercer/OpenWrt-CI>
+#
+# Copyright (C) 2019 P3TERX
+#
+# Copyright (C) 2020 KFERMercer
+#
+name: OpenWrt-CI-LEAN-JDCAX6600
+
+on:
+  workflow_dispatch:
+    inputs:
+      set_kernel_version:
+        description: 'Set Kernel Version?'
+        required: true
+        default: 'false'
+        type: choice
+        options: [true, false]
+      kernel_version:
+        description: 'Kernel Version You Need'
+        required: false
+        default: '6.1'
+      update_kernel_version:
+        description: 'Update Kernel Version?'
+        required: true
+        default: 'false'
+        type: choice
+        options: [true, false]
+      set_lan_ip:
+        description: 'Set LAN IP?'
+        required: true
+        default: 'false'
+        type: choice
+        options: [true, false]
+      lan_ip:
+        description: 'LAN IP You Need'
+        required: false
+        default: '192.168.10.1'
+      ccache:
+        description: 'Enable ccache?'
+        required: true
+        default: 'true'
+        type: choice
+        options: [true, false]
+      ssh:
+        description: 'Enable SSH?'
+        required: true
+        default: 'false'
+        type: choice
+        options: [true, false]
+      config_file:
+        description: 'Config file name in "myconfig" folder'
+        required: false
+        default: 'jdcax6000.config'
+  schedule:
+    - cron: 0 19 * * *
+
+env:
+  REPO_URL: https://github.com/coolsnowwolf/lede
+  REPO_BRANCH: master
+  SET_KERNEL_VERSION: ${{ github.event.inputs.set_kernel_version || 'false' }}
+  KERNEL_VERSION: ${{ github.event.inputs.kernel_version || '6.1' }}
+  UPDATE_KERNEL_VERSION: ${{ github.event.inputs.update_kernel_version || 'false' }}
+  SET_LAN_IP: ${{ github.event.inputs.set_lan_ip || 'false' }}
+  LAN_IP: ${{ github.event.inputs.lan_ip || '192.168.10.1' }}
+  CCACHE: ${{ github.event.inputs.ccache || 'false' }}
+  SSH: ${{ github.event.inputs.ssh || 'false' }}
+  CONFIG_FILE: ${{ github.event.inputs.config_file || 'jdcax6000.config' }}
+
+jobs:
+
+  build_openwrt:
+
+    name: Build OpenWrt Firmware
+
+    runs-on: ubuntu-22.04
+    # runs-on: ubuntu-24.04
+    # runs-on: ubuntu-latest
+
+    steps:
+      - name: Show Task Information
+        run: |
+          echo "Repo URL: ${{ env.REPO_URL }}"
+          echo "Repo Branch: ${{ env.REPO_BRANCH }}"
+          echo "Set Kernel Version: ${{ env.SET_KERNEL_VERSION }}"
+          echo "Kernel Version: ${{ env.KERNEL_VERSION }}"
+          echo "SSH connection: ${{ env.SSH }}"
+          echo "Config File: ${{ env.CONFIG_FILE }}"
+          echo "Set LAN IP: ${{ env.SET_LAN_IP }}"
+          echo "LAN IP: ${{ env.LAN_IP }}"
+
+      - name: Check Server Information
+        run: |
+          echo "--------------------------System Information--------------------------"
+          echo "Operating System: $(lsb_release -d | awk -F'\t' '{print $2}')"
+          echo "Kernel Version: $(uname -r)"
+          echo "--------------------------CPU Information--------------------------"
+          echo "Physical CPU Count: $(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
+          echo "CPU Core Count: $(nproc)"
+          echo -e "CPU Model Information: $(cat /proc/cpuinfo | grep -m1 name | awk -F: '{print $2}')\n"
+          echo "--------------------------Memory Information--------------------------"
+          echo "Installed Memory Details:"
+          echo -e "$(sudo lshw -short -C memory | grep GiB)\n"
+          echo "--------------------------Disk Information--------------------------"
+          echo "Disk Count: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+
+      - name: Checkout Project
+        uses: actions/checkout@main
+        with:
+          fetch-depth: 0
+
+      - name: Check If Config File Exists
+        working-directory: ./
+        run: |
+          if [ ! -f "./myconfig/${{ env.CONFIG_FILE }}" ]; then
+            echo "Error: Configuration file myconfig/${{ env.CONFIG_FILE }} does not exist."
+            exit 1
+          fi
+
+      - name: Space Cleanup And Initialization Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          docker image prune -a -f
+          sudo -E rm -rf /usr/share/dotnet /usr/share/swift /usr/share/miniconda /usr/share/az* /etc/mysql /etc/php /etc/apt/sources.list.d /usr/local/lib/android
+          sudo -E apt-mark hold grub-efi-amd64-signed
+          sudo -E apt -y remove --purge $(dpkg -l | grep -E 'linux-(image|headers|modules|azure)' | awk '{print $2}' | grep -v $(uname -r | sed 's/\([0-9.-]*\)-[^-]*$/\1/'))
+          sudo -E apt -y remove --purge android* azure* clang* containerd.io dotnet* docker* firefox* gcc-9 gcc-10 gcc-11 gcc-12 ghc* golang* google* kubectl libclang* libgl1* lld* llvm* microsoft* mongodb* mono* mysql* nodejs* openjdk* php* postgresql* powershell* ruby* snap* temurin* texlive* yarn* zulu*
+          sudo -E apt update
+          sudo -E apt -y full-upgrade
+          sudo -E apt -y install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib gettext genisoimage git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool llvm lrzsz msmtp ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+          sudo -E systemctl daemon-reload
+          sudo -E apt -y autoremove --purge
+          sudo -E apt clean
+          sudo -E timedatectl set-timezone "Asia/Shanghai"
+
+          echo "--------------------------Disk Information After Cleanup--------------------------"
+          echo "Disk Count: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+
+      - name: Pull Lean Firmware Source Code
+        working-directory: ./
+        run: |
+          git clone ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt
+
+      - name: Toolchain Cache
+        uses: stupidloud/cachewrtbuild@main
+        with:
+          ccache: ${{ env.CCACHE }}
+          mixkey: 'qualcommax'
+          prefix: ${{ github.workspace }}/openwrt
+
+      - name: Set Kernel Version
+        working-directory: ./openwrt
+        if: env.SET_KERNEL_VERSION == 'true'
+        run: |
+          if [ -d "./target/linux/qualcommax/patches-${{ env.KERNEL_VERSION }}" ]; then
+            sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:=${{ env.KERNEL_VERSION }}/g' ./target/linux/qualcommax/Makefile
+            sed -i 's/^KERNEL_TESTING_PATCHVER:=.*/KERNEL_TESTING_PATCHVER:=${{ env.KERNEL_VERSION }}/g' ./target/linux/qualcommax/Makefile
+          else
+            echo "Folder does not exist: ./target/linux/qualcommax/patches-${{ env.KERNEL_VERSION }}"
+            exit 1
+          fi
+
+      - name: Update Kernel Version
+        working-directory: ./openwrt
+        if: env.UPDATE_KERNEL_VERSION == 'true'
+        run: |
+          kernel_versions=("5.4" "5.10" "5.15" "6.1" "6.6" "6.12")
+
+          for major_version in "${kernel_versions[@]}"; do
+            linux_latest_version=$(curl -s https://www.kernel.org/ | grep -oP "(?<=v${major_version//./\\.}\.)[0-9]+" | sort -n | tail -1)
+            full_version="${major_version}.${linux_latest_version}"
+            echo "Latest Linux kernel version: $full_version"
+
+            base_url="https://www.kernel.org/pub/linux/kernel/v${major_version%%.*}.x"
+            source_code_url="$base_url/linux-$full_version.tar.xz"
+
+            kernel_sha256=$(curl -sL $source_code_url | sha256sum | awk '{print $1}')
+            echo "Source package SHA256 hash: $kernel_sha256"
+
+            kernel_version_file="include/kernel-${major_version}"
+            if [ -f "$kernel_version_file" ]; then
+              echo "Original configuration:"
+              cat "$kernel_version_file"
+              sed -i "s|^LINUX_VERSION-${major_version} = .*|LINUX_VERSION-${major_version} = .${linux_latest_version}|" "$kernel_version_file"
+              sed -i "s|^LINUX_KERNEL_HASH-${major_version}.* = .*|LINUX_KERNEL_HASH-${full_version} = $kernel_sha256|" "$kernel_version_file"
+              echo "Updated version number and SHA256 in $kernel_version_file"
+              echo "Current configuration:"
+              cat "$kernel_version_file"
+            else
+              echo "File $kernel_version_file does not exist"
+            fi
+            echo "----------------------------------------------------------------------"
+          done
+
+      - name: Set LAN IP
+        working-directory: ./openwrt
+        if: env.SET_LAN_IP == 'true'
+        run: |
+          [ -f ./package/base-files/files/bin/config_generate ] && sed -i 's/192.168.1.1/${{ env.LAN_IP }}/g' ./package/base-files/files/bin/config_generate
+          [ -f ./package/base-files/luci2/bin/config_generate ] && sed -i 's/192.168.1.1/${{ env.LAN_IP }}/g' ./package/base-files/luci2/bin/config_generate
+
+      - name: Add Feeds
+        working-directory: ./openwrt
+        run: |
+          sed -i 's/#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
+          echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
+          # echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall;main' >> feeds.conf.default
+          # echo 'src-git lucky https://github.com/sirpdboy/luci-app-lucky;main' >> feeds.conf.default
+
+      - name: Update Feeds
+        working-directory: ./openwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Get Latest Tailscale Version
+        working-directory: ./openwrt
+        run: |
+          tailscale_latest_version=$(curl -s https://api.github.com/repos/tailscale/tailscale/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^v//')
+          echo "Latest Tailscale version: ${tailscale_latest_version}"
+          [ ! -d "./dl" ] && mkdir -p ./dl
+          wget https://codeload.github.com/tailscale/tailscale/tar.gz/v${tailscale_latest_version} -O dl/tailscale-${tailscale_latest_version}.tar.gz
+          tailscale_hash=$(sha256sum dl/tailscale-${tailscale_latest_version}.tar.gz | awk '{ print $1 }')
+
+          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${tailscale_latest_version}/" feeds/packages/net/tailscale/Makefile
+          sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${tailscale_hash}/" feeds/packages/net/tailscale/Makefile
+
+      # - name: Add Tailscale Luci
+      #   working-directory: ./openwrt
+      #   run: |
+      #     sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
+      #     git clone https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
+
+      # - name: Get Latest OpenVPN Version
+      #   working-directory: ./openwrt
+      #   run: |
+      #     openvpn_latest_version=$(curl -s https://build.openvpn.net/downloads/releases/ | grep -oP 'openvpn-\K[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n 1)
+      #     echo "Latest OpenVPN version: ${openvpn_latest_version}"
+      #     [ ! -d "./dl" ] && mkdir -p ./dl
+      #     wget https://build.openvpn.net/downloads/releases/openvpn-${openvpn_latest_version}.tar.gz -O dl/openvpn-${openvpn_latest_version}.tar.gz
+      #     openvpn_hash=$(sha256sum dl/openvpn-${openvpn_latest_version}.tar.gz | awk '{ print $1 }')
+
+      #     sed -i 's/PKG_SOURCE:=.*/PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION)\.tar\.gz/' feeds/packages/net/openvpn/Makefile
+      #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${openvpn_latest_version}/" feeds/packages/net/openvpn/Makefile
+      #     sed -i "s/PKG_HASH:=.*/PKG_HASH:=${openvpn_hash}/" feeds/packages/net/openvpn/Makefile
+
+      # - name: Update OpenVPN
+      #   working-directory: ./
+      #   run: |
+      #     git clone https://github.com/openwrt/packages
+      #     rm -rf ./openwrt/feeds/packages/net/openvpn
+      #     cp -r ./packages/net/openvpn ./openwrt/feeds/packages/net/openvpn
+      #     cat ./openwrt/feeds/packages/net/openvpn/Makefile
+      #     rm -rf ./packages
+      #     git clone https://github.com/openwrt/luci
+      #     rm -rf ./openwrt/feeds/luci/applications/luci-app-openvpn
+      #     cp -r ./luci/applications/luci-app-openvpn ./openwrt/feeds/luci/applications/luci-app-openvpn
+      #     cat ./openwrt/feeds/luci/applications/luci-app-openvpn/Makefile
+      #     rm -rf ./luci
+
+      # - name: Get Latest Openssl Version
+      #   working-directory: ./openwrt
+      #   run: |
+      #     openssl_latest_version=$(curl -s https://api.github.com/repos/openssl/openssl/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^openssl-//')
+      #     openssl_latest_version=3.0.15
+      #     echo "Latest Openssl version: ${openssl_latest_version}"
+      #     [ ! -d "./dl" ] && mkdir -p ./dl
+      #     wget https://github.com/openssl/openssl/releases/download/openssl-${openssl_latest_version}/openssl-${openssl_latest_version}.tar.gz -O dl/openssl-${openssl_latest_version}.tar.gz
+      #     openssl_hash=$(sha256sum dl/openssl-${openssl_latest_version}.tar.gz | awk '{ print $1 }')
+
+      #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${openssl_latest_version}/" package/libs/openssl/Makefile
+      #     sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${openssl_hash}/" package/libs/openssl/Makefile
+
+      # - name: Get Latest ZeroTierOne Version
+      #   working-directory: ./openwrt
+      #   run: |
+      #     zerotier_latest_version=$(curl -s https://api.github.com/repos/zerotier/zerotierone/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^v//')
+      #     echo "Latest ZeroTierOne version: ${zerotier_latest_version}"
+      #     [ ! -d "./dl" ] && mkdir -p ./dl
+      #     wget https://codeload.github.com/zerotier/zerotierone/tar.gz/${zerotier_latest_version} -O dl/ZeroTierOne-${zerotier_latest_version}.tar.gz
+      #     zerotier_hash=$(sha256sum dl/ZeroTierOne-${zerotier_latest_version}.tar.gz | awk '{ print $1 }')
+
+      #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${zerotier_latest_version}/" feeds/packages/net/zerotier/Makefile
+      #     sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${zerotier_hash}/" feeds/packages/net/zerotier/Makefile
+
+      - name: Import Custom Configuration
+        working-directory: ./
+        run: cp -f myconfig/${{ env.CONFIG_FILE }} ./openwrt/.config
+
+      - name: Generate Configuration
+        working-directory: ./openwrt
+        run: make defconfig
+
+      - name: Launch SSH Management
+        uses: P3TERX/ssh2actions@v1.0.0
+        if: env.SSH == 'true'
+        env:
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+
+      - name: Upload .config
+        uses: actions/upload-artifact@v4
+        with:
+          name: .config
+          path: ./openwrt/.config
+          include-hidden-files: true
+
+      - name: Download Packages
+        working-directory: ./openwrt
+        run: |
+          make download -j16
+          ls -la ./dl
+
+      - name: Compile Firmware
+        working-directory: ./openwrt
+        run: |
+          make -j$(nproc) || echo "Disk Count: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT && make -j1 V=s
+          echo "======================="
+          echo "Space usage:"
+          echo "======================="
+          df -h
+          echo "======================="
+          du -h --max-depth=1 ./ --exclude=build_dir --exclude=bin
+          du -h --max-depth=1 ./build_dir
+          du -h --max-depth=1 ./bin
+
+      - name: Prepare artifact
+        working-directory: ./openwrt
+        run: |
+          mkdir -p ./artifact/package
+          mkdir -p ./artifact/buildinfo
+          rm -rf $(find ./bin/targets/ -type d -name "packages")
+          cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
+          cp -rf $(find ./bin/targets/ -type f -name "*.buildinfo" -o -name "*.manifest") ./artifact/buildinfo/
+
+      - name: Upload Buildinfo
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_Buildinfo
+          path: ./openwrt/artifact/buildinfo/
+
+      - name: Upload Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_Package
+          path: ./openwrt/artifact/package/
+
+      - name: Upload Firmware ALL
+        uses: actions/upload-artifact@v4
+        with:
+          name: OpenWrt_Firmware
+          path: ./openwrt/bin/targets/
+
+      - name: Upload Firmware squashfs-factory
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-factory.bin
+          path: ./openwrt/bin/targets/qualcommax/ipq60xx/openwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-factory.bin
+
+      - name: Upload Firmware squashfs-sysupgrade
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-sysupgrade.bin
+          path: ./openwrt/bin/targets/qualcommax/ipq60xx/openwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-sysupgrade.bin
+
+      - name: Upload Firmware squashfs-recovery
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-recovery.bin
+          path: ./openwrt/bin/targets/qualcommax/ipq60xx/openwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-squashfs-recovery.bin
+
+      - name: Upload Firmware initramfs-uImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: openwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-initramfs-uImage.itb
+          path: ./openwrt/bin/targets/qualcommax/ipq60xx/openwrt-qualcommax-ipq60xx-jdcloud_re-cs-02-initramfs-uImage.itb

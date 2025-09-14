@@ -281,17 +281,17 @@ jobs:
       #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${openssl_latest_version}/" package/libs/openssl/Makefile
       #     sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${openssl_hash}/" package/libs/openssl/Makefile
 
-      - name: Get Latest ZeroTierOne Version
-        working-directory: ./openwrt
-        run: |
-          zerotier_latest_version=$(curl -s https://api.github.com/repos/zerotier/zerotierone/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^v//')
-          echo "Latest ZeroTierOne version: ${zerotier_latest_version}"
-          [ ! -d "./dl" ] && mkdir -p ./dl
-          wget https://codeload.github.com/zerotier/zerotierone/tar.gz/${zerotier_latest_version} -O dl/ZeroTierOne-${zerotier_latest_version}.tar.gz
-          zerotier_hash=$(sha256sum dl/ZeroTierOne-${zerotier_latest_version}.tar.gz | awk '{ print $1 }')
+      # - name: Get Latest ZeroTierOne Version
+      #   working-directory: ./openwrt
+      #   run: |
+      #     zerotier_latest_version=$(curl -s https://api.github.com/repos/zerotier/zerotierone/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^v//')
+      #     echo "Latest ZeroTierOne version: ${zerotier_latest_version}"
+      #     [ ! -d "./dl" ] && mkdir -p ./dl
+      #     wget https://codeload.github.com/zerotier/zerotierone/tar.gz/${zerotier_latest_version} -O dl/ZeroTierOne-${zerotier_latest_version}.tar.gz
+      #     zerotier_hash=$(sha256sum dl/ZeroTierOne-${zerotier_latest_version}.tar.gz | awk '{ print $1 }')
 
-          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${zerotier_latest_version}/" feeds/packages/net/zerotier/Makefile
-          sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${zerotier_hash}/" feeds/packages/net/zerotier/Makefile
+      #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${zerotier_latest_version}/" feeds/packages/net/zerotier/Makefile
+      #     sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${zerotier_hash}/" feeds/packages/net/zerotier/Makefile
 
       - name: Import Custom Configuration
         working-directory: ./

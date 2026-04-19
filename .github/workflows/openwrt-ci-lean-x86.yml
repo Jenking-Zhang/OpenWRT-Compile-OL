@@ -344,39 +344,51 @@ jobs:
         run: |
           mkdir -p ./artifact/package
           mkdir -p ./artifact/buildinfo
-          rm -rf $(find ./bin/targets/ -type d -name "packages")
-          cp -rf $(find ./bin/packages/ -type f -name "*.ipk") ./artifact/package/
-          cp -rf $(find ./bin/targets/ -type f -name "*.buildinfo" -o -name "*.manifest") ./artifact/buildinfo/
+
+          # safer delete
+          find ./bin/targets/ -type d -name "packages" -exec rm -rf {} +
+
+          # copy packages
+          find ./bin/packages/ -type f -name "*.ipk" -exec cp -rf {} ./artifact/package/ \;
+
+          # copy buildinfo / manifest（避免空匹配报错）
+          find ./bin/targets/ -type f \( -name "*.buildinfo" -o -name "*.manifest" \) \
+            -exec cp -rf {} ./artifact/buildinfo/ \; || true
 
       - name: Upload Buildinfo
         uses: actions/upload-artifact@v4
         with:
-          name: OpenWrt_Buildinfo
+          name: OpenWrt_Buildinfo_${{ github.run_number }}
           path: ./openwrt/artifact/buildinfo/
           include-hidden-files: true
 
       - name: Upload Package
         uses: actions/upload-artifact@v4
         with:
-          name: OpenWrt_Package
+          name: OpenWrt_Package_${{ github.run_number }}
           path: ./openwrt/artifact/package/
           include-hidden-files: true
 
       - name: Upload Firmware ALL
         uses: actions/upload-artifact@v4
         with:
-          name: OpenWrt_Firmware
+          name: OpenWrt_Firmware_${{ github.run_number }}
           path: ./openwrt/bin/targets/
           include-hidden-files: true
 
       - name: Upload Firmware x64 EFI-img
         uses: actions/upload-artifact@v4
         with:
-          name: openwrt-x86-64-generic-squashfs-combined-efi.img.gz
+          name: openwrt-x86-64-efi_${{ github.run_number }}
           path: ./openwrt/bin/targets/x86/64/openwrt-x86-64-generic-squashfs-combined-efi.img.gz
           compression-level: 0
 
-      # ================= Release（新增部分） =================
+      # ================= Release =================
+
+      - name: Generate Build Info
+        id: meta
+        run: |
+          echo "DATE=$(date '+%Y-%m-%d %H:%M:%S')" >> $GITHUB_OUTPUT
 
       - name: Delete Old Release (latest)
         continue-on-error: true
@@ -390,7 +402,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
-          name: OpenWrt Latest Build
+          name: OpenWrt Latest Build (Run ${{ github.run_number }})
           body: |
             ## OpenWrt Latest Build
 
@@ -399,11 +411,16 @@ jobs:
             - Branch: ${{ env.REPO_BRANCH }}
             - Run: ${{ github.run_number }}
             - Commit: ${{ github.sha }}
+            - Build Time: ${{ steps.meta.outputs.DATE }}
 
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check Firmware Exists
+        run: |
+          ls ./openwrt/bin/targets/x86/64/*efi.img.gz
 
       - name: Upload Firmware to Release
         uses: softprops/action-gh-release@v2
@@ -411,6 +428,7 @@ jobs:
           tag_name: latest
           files: |
             ./openwrt/bin/targets/x86/64/*efi.img.gz
-            ./openwrt/artifact/buildinfo/*
+            ./openwrt/artifact/buildinfo/*.buildinfo
+            ./openwrt/artifact/buildinfo/*.manifest
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -228,17 +228,52 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: Get Latest Tailscale Version
+      - name: Update Tailscale & LuCI
         working-directory: ./openwrt
         run: |
-          tailscale_latest_version=$(curl -s https://api.github.com/repos/tailscale/tailscale/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^v//')
-          echo "Latest Tailscale version: ${tailscale_latest_version}"
-          [ ! -d "./dl" ] && mkdir -p ./dl
-          wget https://codeload.github.com/tailscale/tailscale/tar.gz/v${tailscale_latest_version} -O dl/tailscale-${tailscale_latest_version}.tar.gz
-          tailscale_hash=$(sha256sum dl/tailscale-${tailscale_latest_version}.tar.gz | awk '{ print $1 }')
+          # Remove old tailscale package
+          rm -rf ./feeds/packages/net/tailscale
 
-          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${tailscale_latest_version}/" feeds/packages/net/tailscale/Makefile
-          sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${tailscale_hash}/" feeds/packages/net/tailscale/Makefile
+          # Remove old luci app if exists
+          rm -rf ./package/luci-app-tailscale-community
+          rm -rf ./feeds/luci/applications/luci-app-tailscale*
+          rm -rf ./package/luci-app-tailscale*
+
+          # Clone latest tailscale package
+          git clone --depth=1 https://github.com/GuNanOvO/openwrt-tailscale.git /tmp/openwrt-tailscale
+          cp -r /tmp/openwrt-tailscale/package/tailscale ./feeds/packages/net/tailscale
+
+          # Clone latest luci app
+          git clone --depth=1 https://github.com/Tokisaki-Galaxy/luci-app-tailscale-community.git /tmp/luci-app-tailscale-community
+          cp -r /tmp/luci-app-tailscale-community/luci-app-tailscale-community ./package/luci-app-tailscale-community
+
+          # Cleanup
+          rm -rf /tmp/openwrt-tailscale
+          rm -rf /tmp/luci-app-tailscale-community
+
+          echo "=============================="
+          echo "Installed Tailscale package:"
+          echo "=============================="
+          cat ./feeds/packages/net/tailscale/Makefile || true
+
+          echo "=============================="
+          echo "Installed LuCI app:"
+          echo "=============================="
+          cat ./package/luci-app-tailscale-community/Makefile || true
+
+          ./scripts/feeds install -a -f
+
+      # - name: Get Latest Tailscale Version
+      #   working-directory: ./openwrt
+      #   run: |
+      #     tailscale_latest_version=$(curl -s https://api.github.com/repos/tailscale/tailscale/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^v//')
+      #     echo "Latest Tailscale version: ${tailscale_latest_version}"
+      #     [ ! -d "./dl" ] && mkdir -p ./dl
+      #     wget https://codeload.github.com/tailscale/tailscale/tar.gz/v${tailscale_latest_version} -O dl/tailscale-${tailscale_latest_version}.tar.gz
+      #     tailscale_hash=$(sha256sum dl/tailscale-${tailscale_latest_version}.tar.gz | awk '{ print $1 }')
+
+      #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${tailscale_latest_version}/" feeds/packages/net/tailscale/Makefile
+      #     sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${tailscale_hash}/" feeds/packages/net/tailscale/Makefile
 
       # - name: Add Tailscale Luci
       #   working-directory: ./openwrt

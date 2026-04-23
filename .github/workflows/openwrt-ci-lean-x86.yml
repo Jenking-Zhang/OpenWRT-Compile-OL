@@ -59,7 +59,7 @@ concurrency:
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
   REPO_BRANCH: master
-  SET_KERNEL_VERSION: ${{ github.event.inputs.set_kernel_version || 'true' }}
+  SET_KERNEL_VERSION: ${{ github.event.inputs.set_kernel_version || 'false' }}
   KERNEL_VERSION: ${{ github.event.inputs.kernel_version || '6.12' }}
   UPDATE_KERNEL_VERSION: ${{ github.event.inputs.update_kernel_version || 'false' }}
   SET_LAN_IP: ${{ github.event.inputs.set_lan_ip || 'false' }}

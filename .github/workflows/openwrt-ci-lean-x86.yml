@@ -349,11 +349,12 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
       - name: Upload .config
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: .config
           path: ./openwrt/.config
           include-hidden-files: true
+          archive: false
 
       - name: Download Packages
         working-directory: ./openwrt
@@ -391,32 +392,67 @@ jobs:
             -exec cp -rf {} ./artifact/buildinfo/ \; || true
 
       - name: Upload Buildinfo
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: OpenWrt_Buildinfo_${{ github.run_number }}
+          name: OpenWrt_Buildinfo
           path: ./openwrt/artifact/buildinfo/
           include-hidden-files: true
 
       - name: Upload Package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: OpenWrt_Package_${{ github.run_number }}
-          path: ./openwrt/artifact/package/
+          name: OpenWrt_Package
+          path: |
+            ./openwrt/artifact/package/
           include-hidden-files: true
 
       - name: Upload Firmware ALL
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: OpenWrt_Firmware_${{ github.run_number }}
+          name: OpenWrt_Firmware
           path: ./openwrt/bin/targets/
           include-hidden-files: true
 
       - name: Upload Firmware x64 EFI-img
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
-          name: openwrt-x86-64-efi_${{ github.run_number }}
-          path: ./openwrt/bin/targets/x86/64/openwrt-x86-64-generic-squashfs-combined-efi.img.gz
-          compression-level: 0
+          path: ./openwrt/bin/targets/x86/64/*-efi.img.gz
+          archive: false
+
+      # - name: Upload Firmware x64 EFI-qcow2
+      #   uses: actions/upload-artifact@v7
+      #   with:
+      #     name: openwrt-x86-64-generic-squashfs-combined-efi.qcow2
+      #     path: ./openwrt/bin/targets/x86/64/openwrt-x86-64-generic-squashfs-combined-efi.qcow2
+      #     archive: false
+
+      # - name: Upload Firmware x64 EFI-vdi
+      #   uses: actions/upload-artifact@v7
+      #   with:
+      #     name: openwrt-x86-64-generic-squashfs-combined-efi.vdi
+      #     path: ./openwrt/bin/targets/x86/64/openwrt-x86-64-generic-squashfs-combined-efi.vdi
+      #     archive: false
+
+      # - name: Upload Firmware x64 EFI-vhdx
+      #   uses: actions/upload-artifact@v7
+      #   with:
+      #     name: openwrt-x86-64-generic-squashfs-combined-efi.vhdx
+      #     path: ./openwrt/bin/targets/x86/64/openwrt-x86-64-generic-squashfs-combined-efi.vhdx
+      #     archive: false
+
+      # - name: Upload Firmware x64 EFI-vmdk
+      #   uses: actions/upload-artifact@v7
+      #   with:
+      #     name: openwrt-x86-64-generic-squashfs-combined-efi.vmdk
+      #     path: ./openwrt/bin/targets/x86/64/openwrt-x86-64-generic-squashfs-combined-efi.vmdk
+      #     archive: false
+
+      # - name: Upload Firmware x64
+      #   uses: actions/upload-artifact@v7
+      #   with:
+      #     name: openwrt-x86-64-generic-squashfs-rootfs.img.gz
+      #     path: ./openwrt/bin/targets/x86/64/openwrt-x86-64-generic-squashfs-rootfs.img.gz
+      #     archive: false
 
       # ================= Release =================
 

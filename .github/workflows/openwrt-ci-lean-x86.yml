@@ -230,31 +230,31 @@ jobs:
 
       - name: Update Tailscale & LuCI
         working-directory: ./openwrt
-        run: |
-          # Remove old tailscale package
-          rm -rf ./feeds/packages/net/tailscale
+        # run: |
+        #   # Remove old tailscale package
+        #   rm -rf ./feeds/packages/net/tailscale
 
           # Remove old luci app if exists
           rm -rf ./package/luci-app-tailscale-community
           rm -rf ./feeds/luci/applications/luci-app-tailscale*
           rm -rf ./package/luci-app-tailscale*
 
-          # Clone latest tailscale package
-          git clone --depth=1 https://github.com/GuNanOvO/openwrt-tailscale.git /tmp/openwrt-tailscale
-          cp -r /tmp/openwrt-tailscale/package/tailscale ./feeds/packages/net/tailscale
+          # # Clone latest tailscale package
+          # git clone --depth=1 https://github.com/GuNanOvO/openwrt-tailscale.git /tmp/openwrt-tailscale
+          # cp -r /tmp/openwrt-tailscale/package/tailscale ./feeds/packages/net/tailscale
 
           # Clone latest luci app
           git clone --depth=1 https://github.com/Tokisaki-Galaxy/luci-app-tailscale-community.git /tmp/luci-app-tailscale-community
           cp -r /tmp/luci-app-tailscale-community/luci-app-tailscale-community ./package/luci-app-tailscale-community
 
           # Cleanup
-          rm -rf /tmp/openwrt-tailscale
+          # rm -rf /tmp/openwrt-tailscale
           rm -rf /tmp/luci-app-tailscale-community
 
-          echo "=============================="
-          echo "Installed Tailscale package:"
-          echo "=============================="
-          cat ./feeds/packages/net/tailscale/Makefile || true
+          # echo "=============================="
+          # echo "Installed Tailscale package:"
+          # echo "=============================="
+          # cat ./feeds/packages/net/tailscale/Makefile || true
 
           echo "=============================="
           echo "Installed LuCI app:"

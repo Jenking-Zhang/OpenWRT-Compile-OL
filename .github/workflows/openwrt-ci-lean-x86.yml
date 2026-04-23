@@ -9,7 +9,7 @@ on:
       set_kernel_version:
         description: 'Set Kernel Version?'
         required: true
-        default: false'
+        default: 'false'
         type: choice
         options: [true, false]
       kernel_version:

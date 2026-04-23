@@ -230,9 +230,9 @@ jobs:
 
       - name: Update Tailscale & LuCI
         working-directory: ./openwrt
-        # run: |
-        #   # Remove old tailscale package
-        #   rm -rf ./feeds/packages/net/tailscale
+        run: |
+          # # Remove old tailscale package
+          # rm -rf ./feeds/packages/net/tailscale
 
           # Remove old luci app if exists
           rm -rf ./package/luci-app-tailscale-community

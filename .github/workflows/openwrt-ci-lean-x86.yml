@@ -228,6 +228,28 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
+      - name: Update AdGuardHome LuCI
+        working-directory: ./openwrt
+        run: |
+          # 1. 彻底清理旧的插件目录
+          rm -rf ./feeds/luci/applications/luci-app-adguardhome
+          rm -rf ./package/feeds/luci/luci-app-adguardhome
+          rm -rf ./package/lean/luci-app-adguardhome
+          rm -rf ./package/luci-app-adguardhome
+
+          # 2. 直接克隆到目标位置
+          git clone --depth=1 https://github.com/OneNAS-space/luci-app-adguardhome.git ./package/luci-app-adguardhome
+
+          # 3. 验证并更新 feeds
+          echo "=============================="
+          echo "Installed AdGuardHome LuCI app:"
+          echo "=============================="
+          cat ./package/luci-app-adguardhome/Makefile || true
+
+          # 4. 强制刷新 feeds 建立符号链接
+          # ./scripts/feeds update -i
+          ./scripts/feeds install -a -f
+
       - name: Update Tailscale & LuCI
         working-directory: ./openwrt
         run: |

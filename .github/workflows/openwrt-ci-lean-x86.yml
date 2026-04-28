@@ -15,7 +15,7 @@ on:
       kernel_version:
         description: 'Kernel Version You Need'
         required: false
-        default: '6.12'
+        default: '6.18'
       update_kernel_version:
         description: 'Update Kernel Version?'
         required: true
@@ -60,7 +60,7 @@ env:
   REPO_URL: https://github.com/coolsnowwolf/lede
   REPO_BRANCH: master
   SET_KERNEL_VERSION: ${{ github.event.inputs.set_kernel_version || 'false' }}
-  KERNEL_VERSION: ${{ github.event.inputs.kernel_version || '6.12' }}
+  KERNEL_VERSION: ${{ github.event.inputs.kernel_version || '6.18' }}
   UPDATE_KERNEL_VERSION: ${{ github.event.inputs.update_kernel_version || 'false' }}
   SET_LAN_IP: ${{ github.event.inputs.set_lan_ip || 'false' }}
   LAN_IP: ${{ github.event.inputs.lan_ip || '192.168.87.1' }}
@@ -179,7 +179,7 @@ jobs:
         working-directory: ./openwrt
         if: env.UPDATE_KERNEL_VERSION == 'true'
         run: |
-          kernel_versions=("5.4" "5.10" "5.15" "6.1" "6.6" "6.12")
+          kernel_versions=("5.4" "5.10" "5.15" "6.1" "6.6" "6.12" "6.18")
 
           for major_version in "${kernel_versions[@]}"; do
             linux_latest_version=$(curl -s https://www.kernel.org/ | grep -oP "(?<=v${major_version//./\\.}\.)[0-9]+" | sort -n | tail -1)
@@ -228,28 +228,57 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      # - name: Update AdGuardHome LuCI
-      #   working-directory: ./openwrt
-      #   run: |
-      #     # 1. 彻底清理旧的插件目录
-      #     rm -rf ./feeds/luci/applications/luci-app-adguardhome
-      #     rm -rf ./package/feeds/luci/luci-app-adguardhome
-      #     rm -rf ./package/lean/luci-app-adguardhome
-      #     rm -rf ./package/luci-app-adguardhome
+      - name: Update OpenClash LuCI
+        working-directory: ./openwrt
+        run: |
+          # 1. 彻底清理旧路径，防止 feeds 里的旧版本残留
+          rm -rf ./package/luci-app-openclash
+          rm -rf ./package/feeds/luci/luci-app-openclash
+          rm -rf ./package/lean/luci-app-openclash
+          rm -rf ./feeds/luci/applications/luci-app-openclash
 
-      #     # 2. 直接克隆到目标位置
-      #     # git clone --depth=1 https://github.com/OneNAS-space/luci-app-adguardhome.git ./package/luci-app-adguardhome
-      #     git clone --depth=1 https://github.com/kenzok78/luci-app-adguardhome.git ./package/luci-app-adguardhome
+          # 2. 拉取整个仓库到临时目录
+          # 使用 --depth=1 依然是推荐的，因为你只需要最新的源码
+          git clone --depth=1 https://github.com/vernesong/OpenClash.git /tmp/openclash_source
 
-      #     # 3. 验证并更新 feeds
-      #     echo "=============================="
-      #     echo "Installed AdGuardHome LuCI app:"
-      #     echo "=============================="
-      #     cat ./package/luci-app-adguardhome/Makefile || true
+          # 3. 将嵌套的插件目录移动到编译系统的 package 目录
+          # 这样直接解决了你说的“目录嵌套”问题
+          cp -r /tmp/openclash_source/luci-app-openclash ./package/luci-app-openclash
 
-      #     # 4. 强制刷新 feeds 建立符号链接
-      #     # ./scripts/feeds update -i
-      #     ./scripts/feeds install -a -f
+          # 4. 清理临时拉取的源码
+          rm -rf /tmp/openclash_source
+
+          # 5. 打印版本号确认，方便在 Action 日志里对账
+          echo "=============================="
+          grep "PKG_VERSION:=" ./package/luci-app-openclash/Makefile || echo "Version info not found"
+          echo "=============================="
+
+          # 6. 强制刷新，让 OpenWrt 识别到这个“手动放入”的新包
+          ./scripts/feeds install -a -f
+
+      - name: Update AdGuardHome LuCI
+        working-directory: ./openwrt
+        run: |
+          # 1. 彻底清理旧的插件目录
+          rm -rf ./feeds/luci/applications/luci-app-adguardhome
+          rm -rf ./package/feeds/luci/luci-app-adguardhome
+          rm -rf ./package/lean/luci-app-adguardhome
+          rm -rf ./package/luci-app-adguardhome
+
+          # 2. 直接克隆到目标位置
+          # git clone --depth=1 https://github.com/OneNAS-space/luci-app-adguardhome.git ./package/luci-app-adguardhome
+          # git clone --depth=1 https://github.com/kenzok78/luci-app-adguardhome.git ./package/luci-app-adguardhome
+          git clone --depth=1 https://github.com/stevenjoezhang/luci-app-adguardhome.git ./package/luci-app-adguardhome
+
+          # 3. 验证并更新 feeds
+          echo "=============================="
+          echo "Installed AdGuardHome LuCI app:"
+          echo "=============================="
+          cat ./package/luci-app-adguardhome/Makefile || true
+
+          # 4. 强制刷新 feeds 建立符号链接
+          # ./scripts/feeds update -i
+          ./scripts/feeds install -a -f
 
       - name: Update Tailscale & LuCI
         working-directory: ./openwrt

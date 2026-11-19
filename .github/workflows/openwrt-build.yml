@@ -7,13 +7,19 @@ on:
   workflow_dispatch:
     inputs:
       config_files:
-        description: '配置文件（myconfig/），下拉选择；支持逗号组合多配置（如 a.config,b.config）'
-        required: true
+        description: '配置文件下拉（myconfig/）'
+        required: false
         type: choice
         default: ''
         options:
-          # __AUTO_UPDATED__ - generate-config 每次保存后自动更新此列表
-          - 'placeholder.config'
+          - 'qualcommbe-ipq53xx-VIKINGYFY.config'
+          - 'cr660x.config'
+          - 'cr660x-mt.config'
+          - 'x86.config'
+      config_extra:
+        description: '自定义配置（逗号分隔多个；优先级高于下拉；留空=用下拉）'
+        required: false
+        default: ''
 
       set_kernel_version:
         description: '切换内核主版本'
@@ -104,9 +110,18 @@ jobs:
       - name: Build Matrix
         id: set-matrix
         run: |
-          CONFIG_INPUT="${{ github.event.inputs.config_files }}"
-          [ -z "$CONFIG_INPUT" ] && CONFIG_INPUT="qualcommbe-ipq53xx-VIKINGYFY-owrt.config"
-          echo "Config input: ${CONFIG_INPUT}"
+          DROPDOWN="${{ github.event.inputs.config_files }}"
+          EXTRA="${{ github.event.inputs.config_extra }}"
+
+          # config_extra 优先（自定义 > 下拉）
+          if [ -n "$EXTRA" ]; then
+            CONFIG_INPUT="$EXTRA"
+          else
+            CONFIG_INPUT="$DROPDOWN"
+          fi
+
+          [ -z "$CONFIG_INPUT" ] && CONFIG_INPUT="qualcommbe-ipq53xx-VIKINGYFY.config"
+          echo "Config source: config_extra='${EXTRA}' → using '${CONFIG_INPUT}'"
 
           IFS=',' read -ra CONFIGS <<< "$CONFIG_INPUT"
           JSON="["
@@ -145,16 +160,17 @@ jobs:
       - name: Resolve Source From Filename
         id: resolve
         run: |
-          # 文件名格式: TARGET-SUBTARGET-[TAG-]SHORT_REPO-BRANCH.config
-          # SHORT_REPO 是已知单字, BRANCH 可能含 hyphen (openwrt-25.12, 25.12-nss)
+          # 文件名格式 (兼容新旧):
+          #   新: TARGET-SUBTARGET-[TAG-]SHORT_REPO-BRANCH.config
+          #   旧: TARGET-SUBTARGET-[TAG-]SHORT_REPO.config (无 BRANCH)
           STEM="${CONFIG_FILE%.config}"
 
-          # 已知 SHORT_REPO 列表 (按长度倒序匹配避免子串冲突)
+          # 已知 SHORT_REPO 列表
           REPO_NAMES="VIKINGYFY JuliusBairaktaris coolsnowwolf immortalwrt openwrt LiBwrt"
 
           MATCHED_REPO=""
           for repo in $REPO_NAMES; do
-            if [[ "$STEM" == *-${repo}-* ]]; then
+            if [[ "$STEM" == *-${repo}-* ]] || [[ "$STEM" == *-${repo} ]]; then
               MATCHED_REPO="$repo"
               break
             fi
@@ -162,12 +178,32 @@ jobs:
 
           if [ -z "$MATCHED_REPO" ]; then
             echo "ERROR: cannot parse SHORT_REPO from '${CONFIG_FILE}'"
-            echo "  Expected format: TARGET-SUBTARGET-[TAG-]SHORT_REPO-BRANCH.config"
+            echo "  Expected format: TARGET-SUBTARGET-[TAG-]SHORT_REPO[-BRANCH].config"
             echo "  Known repos: $REPO_NAMES"
             exit 1
           fi
 
-          BRANCH="${STEM#*-${MATCHED_REPO}-}"
+          # 提取 BRANCH: 去掉前面的 "-SHORT_REPO-" 或 "-SHORT_REPO"
+          AFTER_REPO="${STEM#*-${MATCHED_REPO}}"
+          if [[ "$AFTER_REPO" == -* ]]; then
+            BRANCH="${AFTER_REPO#-}"   # 新格式: "-BRANCH" → "BRANCH"
+          else
+            BRANCH=""                  # 旧格式: 空，走默认
+          fi
+
+          # BRANCH 为空 → 根据 repo 推断默认
+          if [ -z "$BRANCH" ]; then
+            case "$MATCHED_REPO" in
+              "VIKINGYFY")       BRANCH="owrt" ;;
+              "coolsnowwolf")    BRANCH="master" ;;
+              "immortalwrt")     BRANCH="openwrt-25.12" ;;
+              "openwrt")         BRANCH="main" ;;
+              "LiBwrt")          BRANCH="25.12-nss" ;;
+              "JuliusBairaktaris") BRANCH="ppe-nss" ;;
+              *)                 BRANCH="main" ;;
+            esac
+            echo "(旧格式无分支后缀，推断默认分支: ${BRANCH})"
+          fi
 
           # SHORT_REPO → 完整 owner/repo 映射
           case "$MATCHED_REPO" in

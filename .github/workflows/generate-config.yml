@@ -161,103 +161,14 @@ jobs:
           mkdir -p ../myconfig
           cp -f .config "../myconfig/${FINAL_NAME}"
           cd ..
-          echo "FINAL_NAME=${FINAL_NAME}" >> "$GITHUB_ENV"
-
-      - name: Update Build Config Options
-        run: |
-          python3 << 'PYEOF'
-          import glob, os, re
-
-          # 扫描 myconfig/*.config，按名称排序
-          configs = sorted(glob.glob('myconfig/*.config'))
-          names = [os.path.basename(c) for c in configs]
-
-          print(f"Found {len(names)} configs: {names}")
-
-          # 生成 options YAML 片段
-          lines = []
-          for n in names:
-            lines.append(f"          - '{n}'")
-
-          # 如果有多个，加一个全选组合
-          if len(names) > 1:
-            lines.append(f"          - '{','.join(names)}'")
-
-          options_yaml = '\n'.join(lines)
-
-          # default = 刚保存的那个（GITHUB_ENV 传过来的 FINAL_NAME）
-          default = os.environ.get('FINAL_NAME', '')
-          if not default and names:
-            default = names[0]
-
-          default_line = f"        default: '{default}'"
-
-          # 读取 openwrt-build.yml
-          with open('.github/workflows/openwrt-build.yml', 'r') as f:
-            content = f.read()
-
-          # 替换 strategy: 找 __AUTO_UPDATED__ 注释所在行，替换从该行到下一个
-          # "      XXX:" 同级 input key 之间的所有内容
-          marker = '# __AUTO_UPDATED__'
-          if marker not in content:
-            print("WARNING: marker not found in openwrt-build.yml, skip update")
-          else:
-            # 找到 marker 行号
-            lines_all = content.split('\n')
-            marker_idx = None
-            for i, line in enumerate(lines_all):
-              if marker in line:
-                marker_idx = i
-                break
-
-            if marker_idx is not None:
-              # 找到 marker 之后下一个同级 key (6 spaces + 非注释非空)
-              end_idx = len(lines_all)
-              for i in range(marker_idx + 1, len(lines_all)):
-                stripped = lines_all[i]
-                # 同级 key: 6 spaces 缩进 + 字母开头
-                if re.match(r'^      [a-z]', stripped) and ':' in stripped:
-                  end_idx = i
-                  break
-
-              # 找到 default: 行（在 config_files block 里）
-              # 先找到 config_files: 行
-              config_start = None
-              for i, line in enumerate(lines_all):
-                if re.match(r'^      config_files:', line):
-                  config_start = i
-                  break
-
-              if config_start is not None:
-                # 从 config_start 到 marker_idx 之间找 default: 行
-                for i in range(config_start, marker_idx):
-                  if re.match(r'        default:', lines_all[i]):
-                    lines_all[i] = default_line
-                    break
-
-              # 替换 marker 到 end_idx 之间的 options 内容
-              new_block = [marker] + options_yaml.split('\n') + ['']
-              lines_all[marker_idx:end_idx] = new_block
-
-              content = '\n'.join(lines_all)
-              with open('.github/workflows/openwrt-build.yml', 'w') as f:
-                f.write(content)
-              print(f"Updated openwrt-build.yml: {len(names)} options, default={default}")
-
-          # git add
-          os.system('git add .github/workflows/openwrt-build.yml')
-          PYEOF
-
-      - name: Commit & Push
-        run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add myconfig/
+          git add "myconfig/${FINAL_NAME}"
           if git diff --cached --quiet; then
-            echo "No changes, skip commit"
+            echo "No changes vs existing file, skip commit"
           else
-            git commit -m "config: ${FINAL_NAME} + sync build options"
-            git push origin HEAD:${{ github.ref }} 2>&1 || echo "WARNING: push failed"
+            git commit -m "config: ${TARGET}/${SUBTARGET}${TAG:+ ($TAG)} (${SHORT_REPO}/${SOURCE_BRANCH})"
+            git push origin HEAD:${{ github.ref }} 2>&1 || echo "WARNING: push failed, config in artifact"
           fi
 
       - uses: actions/upload-artifact@v4

@@ -2,7 +2,6 @@ name: OpenWRT-Build
 
 permissions:
   contents: write
-  workflows: write
 
 on:
   workflow_dispatch:

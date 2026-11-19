@@ -129,81 +129,9 @@ jobs:
           echo "has_base=true" >> "$GITHUB_OUTPUT"
           echo "custom_tag=${TAG}" >> "$GITHUB_OUTPUT"
 
-
-      - name: Get Latest Tailscale Version
-        working-directory: ./openwrt
-        run: |
-          tailscale_latest_version=$(curl -s https://api.github.com/repos/tailscale/tailscale/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^v//')
-          echo "Latest Tailscale version: ${tailscale_latest_version}"
-          [ ! -d "./dl" ] && mkdir -p ./dl
-          wget https://codeload.github.com/tailscale/tailscale/tar.gz/v${tailscale_latest_version} -O dl/tailscale-${tailscale_latest_version}.tar.gz
-          tailscale_hash=$(sha256sum dl/tailscale-${tailscale_latest_version}.tar.gz | awk '{ print $1 }')
-
-          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${tailscale_latest_version}/" feeds/packages/net/tailscale/Makefile
-          sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${tailscale_hash}/" feeds/packages/net/tailscale/Makefile
-
-      # - name: Add Tailscale Luci
-      #   working-directory: ./openwrt
-      #   run: |
-      #     sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
-      #     git clone https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
-
-      # - name: Get Latest OpenVPN Version
-      #   working-directory: ./openwrt
-      #   run: |
-      #     openvpn_latest_version=$(curl -s https://build.openvpn.net/downloads/releases/ | grep -oP 'openvpn-\K[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n 1)
-      #     echo "Latest OpenVPN version: ${openvpn_latest_version}"
-      #     [ ! -d "./dl" ] && mkdir -p ./dl
-      #     wget https://build.openvpn.net/downloads/releases/openvpn-${openvpn_latest_version}.tar.gz -O dl/openvpn-${openvpn_latest_version}.tar.gz
-      #     openvpn_hash=$(sha256sum dl/openvpn-${openvpn_latest_version}.tar.gz | awk '{ print $1 }')
-
-      #     sed -i 's/PKG_SOURCE:=.*/PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION)\.tar\.gz/' feeds/packages/net/openvpn/Makefile
-      #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${openvpn_latest_version}/" feeds/packages/net/openvpn/Makefile
-      #     sed -i "s/PKG_HASH:=.*/PKG_HASH:=${openvpn_hash}/" feeds/packages/net/openvpn/Makefile
-
-      # - name: Update OpenVPN
-      #   working-directory: ./
-      #   run: |
-      #     git clone https://github.com/openwrt/packages
-      #     rm -rf ./openwrt/feeds/packages/net/openvpn
-      #     cp -r ./packages/net/openvpn ./openwrt/feeds/packages/net/openvpn
-      #     cat ./openwrt/feeds/packages/net/openvpn/Makefile
-      #     rm -rf ./packages
-      #     git clone https://github.com/openwrt/luci
-      #     rm -rf ./openwrt/feeds/luci/applications/luci-app-openvpn
-      #     cp -r ./luci/applications/luci-app-openvpn ./openwrt/feeds/luci/applications/luci-app-openvpn
-      #     cat ./openwrt/feeds/luci/applications/luci-app-openvpn/Makefile
-      #     rm -rf ./luci
-
-      # - name: Get Latest Openssl Version
-      #   working-directory: ./openwrt
-      #   run: |
-      #     openssl_latest_version=$(curl -s https://api.github.com/repos/openssl/openssl/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^openssl-//')
-      #     openssl_latest_version=3.0.15
-      #     echo "Latest Openssl version: ${openssl_latest_version}"
-      #     [ ! -d "./dl" ] && mkdir -p ./dl
-      #     wget https://github.com/openssl/openssl/releases/download/openssl-${openssl_latest_version}/openssl-${openssl_latest_version}.tar.gz -O dl/openssl-${openssl_latest_version}.tar.gz
-      #     openssl_hash=$(sha256sum dl/openssl-${openssl_latest_version}.tar.gz | awk '{ print $1 }')
-
-      #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${openssl_latest_version}/" package/libs/openssl/Makefile
-      #     sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${openssl_hash}/" package/libs/openssl/Makefile
-
-      # - name: Get Latest ZeroTierOne Version
-      #   working-directory: ./openwrt
-      #   run: |
-      #     zerotier_latest_version=$(curl -s https://api.github.com/repos/zerotier/zerotierone/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^v//')
-      #     echo "Latest ZeroTierOne version: ${zerotier_latest_version}"
-      #     [ ! -d "./dl" ] && mkdir -p ./dl
-      #     wget https://codeload.github.com/zerotier/zerotierone/tar.gz/${zerotier_latest_version} -O dl/ZeroTierOne-${zerotier_latest_version}.tar.gz
-      #     zerotier_hash=$(sha256sum dl/ZeroTierOne-${zerotier_latest_version}.tar.gz | awk '{ print $1 }')
-
-      #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${zerotier_latest_version}/" feeds/packages/net/zerotier/Makefile
-      #     sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${zerotier_hash}/" feeds/packages/net/zerotier/Makefile
-
       - name: SSH menuconfig
         working-directory: ./openwrt
         run: |
-          echo "=== SSH via sshx ==="
           echo "退出执行: pkill -f sshx"
           curl -sSf https://sshx.io/get | sh -s run
 

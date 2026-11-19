@@ -10,7 +10,7 @@ on:
         description: '配置文件下拉（myconfig/）'
         required: false
         type: choice
-        default: 'qualcommbe_ipq53xx_jdcloud-re-cs-06_coolsnowwolf_master.config'
+        default: ''
         options:
           - 'qualcommax_ipq807x_linksys-homewrk_VIKINGYFY_owrt.config'
           - 'qualcommbe_ipq53xx_jdcloud-re-cs-06_coolsnowwolf_master.config'

@@ -47,14 +47,10 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo apt-get update -y -qq
+          # menuconfig 只需要 Kconfig (mconf) 能编译 + feeds 能跑
           sudo apt-get install -y --no-install-recommends \
-            build-essential clang cmake curl git wget sed grep jq ccache \
-            device-tree-compiler gawk genisoimage libncurses5-dev \
-            libc6-dev-i386 libncursesw5-dev zlib1g-dev libssl-dev \
-            python3 python3-pyelftools rsync subversion unzip xz-utils vim \
-            libgmp-dev libmpc-dev libmpfr-dev libelf-dev libdw-dev libbpf-dev \
-            libreadline-dev libglib2.0-dev libfuse-dev libtool haveged \
-            msmtp p7zip-full swig texinfo dos2unix patchelf fakeroot
+            build-essential git curl wget sed grep jq python3 \
+            libncurses5-dev libncursesw5-dev zlib1g-dev
 
           sudo -E timedatectl set-timezone "Asia/Shanghai"
 

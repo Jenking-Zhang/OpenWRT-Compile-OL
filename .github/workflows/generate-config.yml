@@ -88,6 +88,12 @@ jobs:
           echo "Cloning ${SOURCE_OWNER} @ ${SOURCE_BRANCH} ..."
           git clone --depth=1 --single-branch --branch "${SOURCE_BRANCH}" "https://github.com/${SOURCE_OWNER}" openwrt
 
+          # 把仓库里的 save-config.sh 注入仓库参数, 复制到 openwrt/
+          sed "s|__REPO__|${SOURCE_OWNER}|g; s|__BRANCH__|${SOURCE_BRANCH}|g; s|__SHORT__|${SHORT_REPO}|g" \
+            save-config.sh > openwrt/save-config.sh
+          chmod +x openwrt/save-config.sh
+          echo "save-config.sh ready (${SHORT_REPO}@${SOURCE_BRANCH})"
+
       - name: Feeds Update & Install
         working-directory: ./openwrt
         run: |
@@ -134,36 +140,24 @@ jobs:
       - name: Save Config
         working-directory: ./openwrt
         run: |
-          SHORT_REPO="${{ steps.clone.outputs.short_repo }}"
-          SOURCE_BRANCH="${{ steps.clone.outputs.source_branch }}"
           TAG="${{ steps.import-config.outputs.custom_tag }}"
           OVERRIDE="${{ github.event.inputs.filename_override }}"
 
-          [ ! -f .config ] && { echo "ERROR: .config not found"; exit 1; }
-
-          TARGET=$(grep -m1 -oP '^CONFIG_TARGET_\K[^=_]+(?==y)' .config || echo "")
-          SUBTARGET=$(grep -m1 -oP "^CONFIG_TARGET_${TARGET}_\K[^=_]+(?==y)" .config || echo "")
-          [ -z "$TARGET" ] || [ -z "$SUBTARGET" ] && { echo "ERROR: cannot parse target from .config"; head -20 .config; exit 1; }
-
           if [ -n "$OVERRIDE" ]; then
-            FINAL_NAME="$OVERRIDE"
+            ./save-config.sh --force "$OVERRIDE"
           elif [ -n "$TAG" ]; then
-            FINAL_NAME="${TARGET}-${SUBTARGET}-${SHORT_REPO}-${SOURCE_BRANCH}-${TAG}.config"
+            ./save-config.sh "$TAG"
           else
-            FINAL_NAME="${TARGET}-${SUBTARGET}-${SHORT_REPO}-${SOURCE_BRANCH}.config"
+            ./save-config.sh
           fi
-
-          echo "Saving to myconfig/${FINAL_NAME} (${TARGET}/${SUBTARGET})"
-          mkdir -p ../myconfig
-          cp -f .config "../myconfig/${FINAL_NAME}"
           cd ..
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "myconfig/${FINAL_NAME}"
+          git add "myconfig/"
           if git diff --cached --quiet; then
             echo "No changes vs existing file, skip commit"
           else
-            git commit -m "config: ${TARGET}/${SUBTARGET}${TAG:+ ($TAG)} (${SHORT_REPO}/${SOURCE_BRANCH})"
+            git commit -m "config: auto-saved via save-config.sh"
             git push origin HEAD:${{ github.ref }} 2>&1 || echo "WARNING: push failed, config in artifact"
           fi
 

@@ -140,6 +140,14 @@ jobs:
       - name: Save Config
         working-directory: ./openwrt
         run: |
+          if [ ! -f .config ]; then
+            echo "WARNING: .config not found in openwrt/, cannot save"
+            echo "  Check: did you configure + save in menuconfig / SSH session?"
+            echo "  Also check Import Existing Config step above."
+            ls -la
+            exit 0
+          fi
+          echo ".config found ($(stat -c%s .config) bytes), proceed to save"
           OVERRIDE="${{ github.event.inputs.filename_override }}"
           if [ -n "$OVERRIDE" ]; then
             ./save-config.sh --force "$OVERRIDE"

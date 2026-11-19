@@ -4,84 +4,208 @@ on:
   workflow_dispatch:
 
 jobs:
-
-  Space-Cleanup:
-
-    name: Space-Cleanup
-
+  diagnose:
     runs-on: ubuntu-22.04
-    # runs-on: ubuntu-24.04
-    # runs-on: ubuntu-latest
-
     steps:
-      - name: Check Server Information
+      # ====== Phase 1: 诊断 runner 上有什么可以清 ======
+      - name: Diagnose Runner Disk Usage
         run: |
-          echo "--------------------------System Information--------------------------"
-          echo "Operating System: $(lsb_release -d | awk -F'\t' '{print $2}')"
-          echo "Kernel Version: $(uname -r)"
-          echo "--------------------------CPU Information--------------------------"
-          echo "Physical CPU Count: $(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
-          echo "CPU Core Count: $(nproc)"
-          echo -e "CPU Model Information: $(cat /proc/cpuinfo | grep -m1 name | awk -F: '{print $2}')\n"
-          echo "--------------------------Memory Information--------------------------"
-          echo "Installed Memory Details:"
-          echo -e "$(sudo lshw -short -C memory | grep GiB)\n"
-          echo "--------------------------Disk Information--------------------------"
-          echo "Disk Count: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+          echo "=== 1. 初始磁盘 ==="
+          df -h /
 
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
-          tool-cache: false
-          
-          # all of these default to true, but feel free to set to
-          # "false" if necessary for your workflow
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
+          echo ""
+          echo "=== 2. 预装大型目录（逐个检查是否存在+体积）==="
+          DIRS=(
+            "/usr/local/lib/android"
+            "/usr/share/dotnet"
+            "/usr/share/swift"
+            "/usr/share/miniconda"
+            "/usr/share/google-chrome"
+            "/opt/google/chrome"
+            "/opt/microsoft"
+            "/usr/share/microsoft-edge"
+            "/usr/lib/firefox"
+            "/usr/share/firefox"
+            "/opt/hostedtoolcache"
+            "/home/linuxbrew"
+            "/usr/share/az"
+            "/opt/az"
+            "/etc/mysql"
+            "/var/lib/mysql"
+            "/etc/postgresql"
+            "/var/lib/postgresql"
+            "/usr/share/postgresql"
+            "/etc/php"
+            "/usr/lib/php"
+            "/etc/apache2"
+            "/etc/nginx"
+            "/usr/share/powershell"
+            "/usr/share/haskell"
+            "/var/lib/docker"
+            "/usr/local/share/docker"
+            "/opt/hostedtoolcache/go"
+            "/opt/hostedtoolcache/node"
+            "/opt/hostedtoolcache/Python"
+            "/opt/hostedtoolcache/CodeQL"
+            "/opt/hostedtoolcache/llvm"
+            "/usr/share/dotnet"
+            "/usr/lib/mono"
+            "/usr/share/texlive"
+            "/var/cache/apt"
+            "/tmp"
+          )
+          for d in "${DIRS[@]}"; do
+            if [ -e "$d" ]; then
+              sz=$(du -sh "$d" 2>/dev/null | awk '{print $1}')
+              echo "  EXIST ${sz}  $d"
+            else
+              echo "  MISS        $d"
+            fi
+          done
 
-      - name: Check Server Information
-        run: |
-          echo "--------------------------System Information--------------------------"
-          echo "Operating System: $(lsb_release -d | awk -F'\t' '{print $2}')"
-          echo "Kernel Version: $(uname -r)"
-          echo "--------------------------CPU Information--------------------------"
-          echo "Physical CPU Count: $(cat /proc/cpuinfo | grep "physical id" | sort | uniq | wc -l)"
-          echo "CPU Core Count: $(nproc)"
-          echo -e "CPU Model Information: $(cat /proc/cpuinfo | grep -m1 name | awk -F: '{print $2}')\n"
-          echo "--------------------------Memory Information--------------------------"
-          echo "Installed Memory Details:"
-          echo -e "$(sudo lshw -short -C memory | grep GiB)\n"
-          echo "--------------------------Disk Information--------------------------"
-          echo "Disk Count: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+          echo ""
+          echo "=== 3. 预装 apt 包（可能可清）==="
+          APT_PKGS=(
+            "android-sdk" "android-sdk-platform-tools"
+            "azure-cli" "azure-functions-core-tools"
+            "dotnet-sdk-6.0" "dotnet-sdk-7.0" "dotnet-sdk-8.0"
+            "google-cloud-cli" "google-cloud-sdk"
+            "golang-go"
+            "ghc" "ghc-*" "haskell-platform"
+            "firefox"
+            "powershell"
+            "temurin-17-jdk" "temurin-21-jdk"
+            "zulu-*"
+            "mongodb-org" "redis-server" "mysql-server" "postgresql"
+            "php-cli" "php-fpm" "libapache2-mod-php"
+            "ruby-full" "ruby-dev"
+            "snapd"
+            "texlive-base" "texlive-latex-*" "texlive-lang-*"
+            "yarn" "nodejs"
+            "libclang*" "clang-*" "llvm-*" "lld-*"
+            "gcc-9" "gcc-10" "gcc-11" "gcc-12" "gcc-13" "gcc-14"
+            "g++-9" "g++-10" "g++-11" "g++-12" "g++-13" "g++-14"
+          )
+          for p in "${APT_PKGS[@]}"; do
+            cnt=$(dpkg -l "$p" 2>/dev/null | grep -c '^ii')
+            if [ "$cnt" -gt 0 ]; then
+              total=$(apt show "$p" 2>/dev/null | grep '^Installed-Size' | awk '{print $2}' | head -1)
+              echo "  INSTALLED  ${p}  Installed-Size=${total} KB"
+            fi
+          done
 
-      - name: Space Cleanup And Initialization Environment
+          echo ""
+          echo "=== 4. apt 缓存大小 ==="
+          du -sh /var/cache/apt/archives 2>/dev/null || echo "  (none)"
+
+          echo ""
+          echo "=== 5. Top 10 根目录占用 ==="
+          sudo du -h --max-depth=1 / 2>/dev/null | sort -rh | head -15
+
+      # ====== Phase 2: 执行清理，每步打印效果 ======
+      - name: Cleanup & Verify
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          docker image prune -a -f
-          sudo -E rm -rf /usr/share/dotnet /usr/share/swift /usr/share/miniconda /usr/share/az* /etc/mysql /etc/php /etc/apt/sources.list.d /usr/local/lib/android
-          sudo -E apt-mark hold grub-efi-amd64-signed
-          sudo -E apt -y remove --purge $(dpkg -l | grep -E 'linux-(image|headers|modules|azure)' | awk '{print $2}' | grep -v $(uname -r | sed 's/\([0-9.-]*\)-[^-]*$/\1/'))
-          sudo -E apt -y remove --purge android* azure* clang* containerd.io dotnet* docker* firefox* gcc-9 gcc-10 gcc-11 gcc-12 ghc* golang* google* kubectl libclang* libgl1* lld* llvm* microsoft* mongodb* mono* mysql* nodejs* openjdk* php* postgresql* powershell* ruby* snap* temurin* texlive* yarn* zulu*
-          sudo -E apt update
-          sudo -E apt -y full-upgrade
-          sudo -E apt -y install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib gettext genisoimage git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool llvm lrzsz msmtp ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
-          sudo -E systemctl daemon-reload
-          sudo -E apt -y autoremove --purge
-          sudo -E apt clean
-          sudo -E timedatectl set-timezone "Asia/Shanghai"
+          echo ""
+          echo "========== 开始清理 =========="
+          BEFORE_ROOT=$(df -k / | tail -1 | awk '{print $3}')
+          set +e  # 清理允许失败，不要因为某个包不存在就挂
 
-          echo "--------------------------Disk Information After Cleanup--------------------------"
-          echo "Disk Count: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+          echo ""
+          echo "--- Step A: rm -rf 预装无用目录 ---"
+          RM_DIRS=(
+            "/usr/local/lib/android"
+            "/usr/share/dotnet"
+            "/usr/share/swift"
+            "/usr/share/miniconda"
+            "/opt/google/chrome"
+            "/opt/microsoft"
+            "/opt/hostedtoolcache"
+            "/home/linuxbrew"
+            "/opt/az"
+            "/usr/share/az"
+            "/etc/mysql"
+            "/var/lib/mysql"
+            "/var/lib/postgresql"
+            "/usr/share/postgresql"
+            "/usr/share/powershell"
+            "/var/lib/docker"
+          )
+          for d in "${RM_DIRS[@]}"; do
+            if [ -e "$d" ]; then
+              sz=$(du -sh "$d" 2>/dev/null | awk '{print $1}')
+              sudo rm -rf "$d" 2>/dev/null && echo "  已清理 ${sz}  $d" || echo "  失败: $d"
+            else
+              echo "  不存在  $d"
+            fi
+          done
 
-      - name: Launch SSH Management
-        uses: P3TERX/ssh2actions@v1.0.0
-        env:
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          echo ""
+          echo "--- Step B: docker image prune ---"
+          docker image prune -a -f 2>/dev/null && echo "  docker prune done" || echo "  docker 不可用"
+
+          echo ""
+          echo "--- Step C: apt purge（每包组独立容错）---"
+          sudo apt-get update -y -qq 2>/dev/null || true
+          for GRP in \
+            "android*" "azure*" "dotnet*" "google-cloud*" \
+            "ghc*" "haskell-*" \
+            "mysql-server*" "postgresql*" "php*" "ruby*" \
+            "temurin-*" "zulu*" "texlive-base" "texlive-latex-*" "texlive-lang-*" \
+            "clang-*" "llvm-*" "lld-*" "libclang*" \
+            "gcc-9" "gcc-10" "g++-9" "g++-10" \
+            "mono-*" "libmono-*" \
+            "powershell" "snapd" "firefox"; do
+            cnt=$(dpkg -l "$GRP" 2>/dev/null | grep -c '^ii')
+            if [ "$cnt" -gt 0 ]; then
+              echo "  purge $GRP ($cnt 包)..."
+              sudo apt-get purge -y "$GRP" 2>/dev/null || true
+            else
+              echo "  不存在 $GRP"
+            fi
+          done
+          sudo apt-get autoremove -y 2>/dev/null || true
+
+          echo ""
+          echo "--- Step D: apt autoremove + clean ---"
+          sudo apt-get autoremove -y 2>/dev/null || true
+          sudo apt-get clean 2>/dev/null || true
+          sudo rm -rf /var/cache/apt/* /tmp/* /var/tmp/*
+
+          AFTER_ROOT=$(df -k / | tail -1 | awk '{print $3}')
+          FREED=$(( (BEFORE_ROOT - AFTER_ROOT) / 1024 ))
+          echo ""
+          echo "========== 清理完成 =========="
+          echo "  释放: ${FREED}MB  (约 $(( FREED / 1024 ))GB)"
+          echo ""
+
+          echo "=== 清理后磁盘 ==="
+          df -h /
+
+          echo ""
+          echo "=== 清理后 Top 15 根目录占用 ==="
+          sudo du -h --max-depth=1 / 2>/dev/null | sort -rh | head -15
+
+          echo ""
+          echo "=== 清理后 apt 包数 ==="
+          dpkg -l | wc -l
+
+          echo ""
+          echo "=== 清理后 GCC/Clang 状态（保留的版本）==="
+          for c in gcc gcc-11 gcc-12 gcc-13 gcc-14 clang clang-14 clang-15 clang-16 clang-17; do
+            $c --version 2>/dev/null | head -1 || echo "  $c 不存在"
+          done
+
+          echo ""
+          echo "=== OpenWrt 编译依赖安装（验证哪些缺）==="
+          sudo apt-get install -y --no-install-recommends \
+            gawk genisoimage device-tree-compiler libncurses5-dev libc6-dev-i386 \
+            python3-pyelftools libelf-dev libdw-dev libbpf-dev \
+            libgmp-dev libmpc-dev libmpfr-dev libreadline-dev libglib2.0-dev libfuse-dev \
+            libtool haveged msmtp p7zip-full subversion \
+            texinfo dos2unix patchelf fakeroot 2>&1 | tail -5
+
+          echo ""
+          echo "=== 最终磁盘 ==="
+          df -h /

@@ -1,41 +1,103 @@
 name: Auto-Clean
 
 on:
-  #自动清理：每天早上5点
   schedule:
-    - cron: 0 21 * * *
-  #手动清理
+    - cron: 0 21 * * *    # UTC 21:00 = 北京 05:00 每天
   workflow_dispatch:
-    inputs:
-      # NUMBER:
-      #   default: '0'
-      #   required: false
-      #   type: string
-      retainDays:
-        description: 'Retain workflows for how many days?'
-        default: '1'
-        required: false
-        type: string
 
 env:
-  GITHUB_TOKEN: ${{secrets.GITHUB_TOKEN}}
-  RETAINDAYS: ${{ github.event.inputs.retainDays || '1' }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-permissions: write-all
+permissions:
+  actions: write
+  contents: read
 
 jobs:
   auto_clean:
-    # runs-on: ubuntu-22.04
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
-      # - name: Delete Old Releases
-      #   uses: dev-drprasad/delete-older-releases@master
-      #   with:
-      #     keep_latest: ${{inputs.NUMBER || '0'}}
-      #     delete_tags: true
+      # =====================================================================
+      # Part 1: 每 workflow 只留最新 1 个成功 run
+      # =====================================================================
+      - name: Clean All Workflow Runs
+        run: |
+          echo "=========================================="
+          echo "  [1/2] Auto-Clean: Workflow Runs"
+          echo "  每 workflow 只留最新 1 个成功"
+          echo "  失败/取消/旧成功 → 全删"
+          echo "=========================================="
 
-      - name: Delete Old Workflows
-        uses: Mattraks/delete-workflow-runs@main
-        with:
-          retain_days: ${{ env.RETAINDAYS }}
-          keep_minimum_runs: 0
+          REPO="${GITHUB_REPOSITORY}"
+          DELETED=0
+          KEPT=0
+
+          # 获取所有 workflow
+          WORKFLOWS=$(curl -s \
+            -H "Authorization: token $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${REPO}/actions/workflows?per_page=100")
+
+          TOTAL_WF=$(echo "$WORKFLOWS" | jq '.total_count')
+          echo "共 ${TOTAL_WF} 个 workflow"
+
+          # 逐个 workflow 处理
+          echo "$WORKFLOWS" | jq -c '.workflows[]' | while read -r WF; do
+            WF_ID=$(echo "$WF" | jq -r '.id')
+            WF_NAME=$(echo "$WF" | jq -r '.name')
+            echo ""
+            echo "--- Workflow: ${WF_NAME} (id=${WF_ID}) ---"
+
+            # 获取该 workflow 的所有 runs（最多 100 条，按时间倒序）
+            RUNS=$(curl -s \
+              -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${REPO}/actions/workflows/${WF_ID}/runs?per_page=100")
+
+            # 找最新的成功 run
+            LATEST_SUCCESS_ID=$(echo "$RUNS" | jq -r '[.workflow_runs[] | select(.conclusion=="success")] | first | .id // empty')
+            LATEST_SUCCESS_NUM=$(echo "$RUNS" | jq -r '[.workflow_runs[] | select(.conclusion=="success")] | first | .run_number // empty')
+
+            if [ -n "$LATEST_SUCCESS_ID" ]; then
+              echo "  ✅ 保留最新成功: Run #${LATEST_SUCCESS_NUM} (id=${LATEST_SUCCESS_ID})"
+              KEPT=$((KEPT + 1))
+            else
+              echo "  ⚠️  无成功记录，全部删除"
+            fi
+
+            # 删除所有 run，除了保留的那个
+            echo "$RUNS" | jq -c '.workflow_runs[]' | while read -r RUN; do
+              RUN_ID=$(echo "$RUN" | jq -r '.id')
+              RUN_NUM=$(echo "$RUN" | jq -r '.run_number')
+              CONCLUSION=$(echo "$RUN" | jq -r '.conclusion')
+              STATUS=$(echo "$RUN" | jq -r '.status')
+
+              # 跳过正在跑的
+              if [ "$STATUS" != "completed" ]; then
+                echo "  ⏭️  跳过（运行中）: Run #${RUN_NUM}"
+                continue
+              fi
+
+              # 跳过保留的那个成功
+              if [ "$RUN_ID" = "$LATEST_SUCCESS_ID" ]; then
+                continue
+              fi
+
+              # 其余全删
+              echo "  🗑️  删除 Run #${RUN_NUM} [${CONCLUSION}] (id=${RUN_ID})"
+              curl -s -X DELETE \
+                -H "Authorization: token $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${REPO}/actions/runs/${RUN_ID}"
+              DELETED=$((DELETED + 1))
+            done
+          done
+
+          echo ""
+          echo "  保留成功记录: ${KEPT}"
+          echo "  删除旧/失败:  ${DELETED}"
+
+      # =====================================================================
+      # Part 2: GitHub Actions Cache 清理 — 暂停
+      # 三条缓存线清理策略不同，需分别设计后再启用：
+      #   DL:        固定 key 滚覆盖，无需清理
+      #   Tools:     多 hash 版本共存，不同源码仓库各自需要，不能一刀切
+      #   Toolchain: per-target 强隔离，hash 变了旧的没用
+      # 当前 Build Tools + Toolchain 里的 pre-delete exact key 用于防撞 save，OK
+      # =====================================================================

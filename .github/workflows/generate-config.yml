@@ -1,55 +1,133 @@
 name: Generate-Config
 
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
-
-env:
-  REPO_URL: https://github.com/coolsnowwolf/lede
-  REPO_BRANCH: master
+    inputs:
+      source_branch:
+        description: '指定源码仓库 + 分支'
+        required: true
+        default: 'VIKINGYFY/immortalwrt -> owrt'
+        type: choice
+        options:
+          - 'VIKINGYFY/immortalwrt -> owrt'
+          - 'VIKINGYFY/immortalwrt -> main'
+          - 'coolsnowwolf/lede -> master'
+          - 'immortalwrt/immortalwrt -> master'
+          - 'immortalwrt/immortalwrt -> openwrt-25.12'
+          - 'immortalwrt/immortalwrt -> openwrt-24.10'
+          - 'immortalwrt/immortalwrt -> openwrt-23.05'
+          - 'openwrt/openwrt -> main'
+          - 'openwrt/openwrt -> openwrt-25.12'
+          - 'openwrt/openwrt -> openwrt-24.10'
+          - 'openwrt/openwrt -> openwrt-23.05'
+          - 'LiBwrt/LibWrt -> 25.12-nss'
+          - 'JuliusBairaktaris/openwrt-ppe-nss -> ppe-nss'
+      config_target:
+        description: '配置文件名（如 x86.config），留空=全新'
+        required: false
+        default: ''
+      custom_tag:
+        description: '自定义tag'
+        required: false
+        default: ''
+      filename_override:
+        description: '指定输出文件名'
+        required: false
+        default: ''
 
 jobs:
-
   generate_config:
-
-    name: Generate OpenWrt .config File
-
     runs-on: ubuntu-22.04
-    # runs-on: ubuntu-24.04
-    # runs-on: ubuntu-latest
-
     steps:
-      - name: Initialization Environment
+      - name: Init Environment
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
-          sudo -E apt update
-          sudo -E apt -y install ack antlr3 asciidoc autoconf automake autopoint binutils bison build-essential bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk gcc-multilib g++-multilib gettext genisoimage git gperf haveged help2man intltool libc6-dev-i386 libelf-dev libfuse-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev libmpfr-dev libncurses5-dev libncursesw5-dev libpython3-dev libreadline-dev libssl-dev libtool llvm lrzsz msmtp ninja-build p7zip p7zip-full patch pkgconf python3 python3-pyelftools python3-setuptools qemu-utils rsync scons squashfs-tools subversion swig texinfo uglifyjs upx-ucl unzip vim wget xmlto xxd zlib1g-dev
+          sudo apt-get update -y -qq
+          sudo apt-get install -y --no-install-recommends \
+            build-essential clang cmake curl git wget sed grep jq ccache \
+            device-tree-compiler gawk genisoimage libncurses5-dev \
+            libc6-dev-i386 libncursesw5-dev zlib1g-dev libssl-dev \
+            python3 python3-pyelftools rsync subversion unzip xz-utils vim \
+            libgmp-dev libmpc-dev libmpfr-dev libelf-dev libdw-dev libbpf-dev \
+            libreadline-dev libglib2.0-dev libfuse-dev libtool haveged \
+            msmtp p7zip-full swig texinfo dos2unix patchelf fakeroot
+
           sudo -E timedatectl set-timezone "Asia/Shanghai"
 
-          echo "--------------------------Disk Information After Cleanup--------------------------"
-          echo "Disk Count: $(ls /dev/sd* | grep -v [1-9] | wc -l)" && df -hT
+      - uses: actions/checkout@main
 
-      - name: Checkout Project
-        uses: actions/checkout@main
-
-      - name: Pull Lean Firmware Source Code
-        working-directory: ./
+      - name: Clone Source
+        id: clone
         run: |
-          git clone ${{ env.REPO_URL }} -b ${{ env.REPO_BRANCH }} openwrt
+          CHOICE="${{ github.event.inputs.source_branch }}"
 
-      - name: Add Feeds
+          if echo "$CHOICE" | grep -qE "( → | -> )"; then
+            SOURCE_OWNER=$(echo "$CHOICE" | sed -E 's/ *(→|->) *.*//' | sed 's/ *$//')
+            SOURCE_BRANCH=$(echo "$CHOICE" | sed -E 's/.*(→|->) *//' | sed 's/^ *//')
+          else
+            SOURCE_OWNER=""
+            SOURCE_BRANCH=""
+          fi
+
+          [ -z "$SOURCE_OWNER" ] && SOURCE_OWNER="VIKINGYFY/immortalwrt"
+
+          case "$SOURCE_OWNER" in
+            "VIKINGYFY/immortalwrt")   SOURCE_BRANCH="${SOURCE_BRANCH:-owrt}" ;;
+            "coolsnowwolf/lede")        SOURCE_BRANCH="${SOURCE_BRANCH:-master}" ;;
+            "immortalwrt/immortalwrt")  SOURCE_BRANCH="${SOURCE_BRANCH:-openwrt-25.12}" ;;
+            "openwrt/openwrt")          SOURCE_BRANCH="${SOURCE_BRANCH:-main}" ;;
+            "LiBwrt/LibWrt")            SOURCE_BRANCH="${SOURCE_BRANCH:-25.12-nss}" ;;
+            *"openwrt-ppe-nss"*)        SOURCE_BRANCH="${SOURCE_BRANCH:-ppe-nss}" ;;
+            *)                          SOURCE_BRANCH="${SOURCE_BRANCH:-main}" ;;
+          esac
+
+          SHORT_REPO=$(echo "$SOURCE_OWNER" | cut -d'/' -f1)
+          echo "source_owner=${SOURCE_OWNER}" >> "$GITHUB_OUTPUT"
+          echo "short_repo=${SHORT_REPO}" >> "$GITHUB_OUTPUT"
+          echo "Cloning ${SOURCE_OWNER} @ ${SOURCE_BRANCH} ..."
+          git clone --depth=1 --single-branch --branch "${SOURCE_BRANCH}" "https://github.com/${SOURCE_OWNER}" openwrt
+
+      - name: Feeds Update & Install
         working-directory: ./openwrt
         run: |
-          sed -i 's/#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
-          echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
-          # echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall;main' >> feeds.conf.default
-          # echo 'src-git lucky https://github.com/sirpdboy/luci-app-lucky;main' >> feeds.conf.default
-
-      - name: Update Feeds
-        working-directory: ./openwrt
-        run: |
+          if grep -q '^#src-git helloworld' ./feeds.conf.default; then
+            sed -i 's/^#src-git helloworld/src-git helloworld/' ./feeds.conf.default
+          fi
+          grep -q 'linkease/istore' ./feeds.conf.default 2>/dev/null || \
+            echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
           ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          ./scripts/feeds install -a -f
+
+      - name: Import Existing Config
+        id: import-config
+        run: |
+          TAG="${{ github.event.inputs.custom_tag }}"
+          PRE_CONFIG="${{ github.event.inputs.config_target }}"
+          OVERRIDE="${{ github.event.inputs.filename_override }}"
+
+          # OVERRIDE 直接用，不拼接
+          if [ -n "$OVERRIDE" ]; then
+            SRC="myconfig/${OVERRIDE}"
+            [ -f "$SRC" ] || { echo "not found: ${SRC}"; echo "has_base=false" >> "$GITHUB_OUTPUT"; echo "custom_tag=${TAG}" >> "$GITHUB_OUTPUT"; exit 0; }
+          elif [ -n "$PRE_CONFIG" ]; then
+            SRC="myconfig/${PRE_CONFIG}"
+            [ -f "$SRC" ] || { echo "not found: ${SRC}, skip import"; echo "has_base=false" >> "$GITHUB_OUTPUT"; echo "custom_tag=${TAG}" >> "$GITHUB_OUTPUT"; exit 0; }
+          else
+            echo "has_base=false" >> "$GITHUB_OUTPUT"
+            echo "custom_tag=${TAG}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Base: ${SRC} → openwrt/.config"
+          cp -f "$SRC" openwrt/.config
+          cd openwrt && make defconfig
+          echo "has_base=true" >> "$GITHUB_OUTPUT"
+          echo "custom_tag=${TAG}" >> "$GITHUB_OUTPUT"
+
 
       - name: Get Latest Tailscale Version
         working-directory: ./openwrt
@@ -121,15 +199,51 @@ jobs:
       #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${zerotier_latest_version}/" feeds/packages/net/zerotier/Makefile
       #     sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${zerotier_hash}/" feeds/packages/net/zerotier/Makefile
 
-      - name: Launch SSH Management
-        uses: P3TERX/ssh2actions@v1.0.0
-        env:
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      - name: SSH menuconfig
+        working-directory: ./openwrt
+        run: |
+          echo "=== SSH via sshx ==="
+          echo "退出执行: pkill -f sshx"
+          curl -sSf https://sshx.io/get | sh -s run
 
-      - name: Upload .config
-        uses: actions/upload-artifact@v4
+      - name: Save Config
+        working-directory: ./openwrt
+        run: |
+          SHORT_REPO="${{ steps.clone.outputs.short_repo }}"
+          TAG="${{ steps.import-config.outputs.custom_tag }}"
+          OVERRIDE="${{ github.event.inputs.filename_override }}"
+
+          [ ! -f .config ] && { echo "ERROR: .config not found"; exit 1; }
+
+          TARGET=$(grep -m1 -oP '^CONFIG_TARGET_\K[^=_]+(?==y)' .config || echo "")
+          SUBTARGET=$(grep -m1 -oP "^CONFIG_TARGET_${TARGET}_\K[^=_]+(?==y)" .config || echo "")
+          [ -z "$TARGET" ] || [ -z "$SUBTARGET" ] && { echo "ERROR: cannot parse target from .config"; head -20 .config; exit 1; }
+
+          if [ -n "$OVERRIDE" ]; then
+            FINAL_NAME="$OVERRIDE"
+          elif [ -n "$TAG" ]; then
+            FINAL_NAME="${TARGET}-${SUBTARGET}-${TAG}-${SHORT_REPO}.config"
+          else
+            FINAL_NAME="${TARGET}-${SUBTARGET}-${SHORT_REPO}.config"
+          fi
+
+          echo "Saving to myconfig/${FINAL_NAME} (${TARGET}/${SUBTARGET})"
+          mkdir -p ../myconfig
+          cp -f .config "../myconfig/${FINAL_NAME}"
+          cd ..
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "myconfig/${FINAL_NAME}"
+          if git diff --cached --quiet; then
+            echo "No changes vs existing file, skip commit"
+          else
+            git commit -m "config: ${TARGET}/${SUBTARGET}${TAG:+ ($TAG)} (${SHORT_REPO})"
+            git push origin HEAD:${{ github.ref }} 2>&1 || echo "WARNING: push failed, config in artifact"
+          fi
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: .config
-          path: ./openwrt/.config
+          name: openwrt-config
+          path: openwrt/.config
           include-hidden-files: true
+          if-no-files-found: error

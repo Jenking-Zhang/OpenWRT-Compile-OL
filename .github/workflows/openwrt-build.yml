@@ -1,0 +1,701 @@
+name: OpenWRT-Build
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: '指定源码仓库 + 分支'
+        required: true
+        default: 'VIKINGYFY/immortalwrt -> owrt'
+        type: choice
+        options:
+          - 'VIKINGYFY/immortalwrt -> owrt'
+          - 'VIKINGYFY/immortalwrt -> main'
+          - 'coolsnowwolf/lede -> master'
+          - 'immortalwrt/immortalwrt -> master'
+          - 'immortalwrt/immortalwrt -> openwrt-25.12'
+          - 'immortalwrt/immortalwrt -> openwrt-24.10'
+          - 'immortalwrt/immortalwrt -> openwrt-23.05'
+          - 'openwrt/openwrt -> main'
+          - 'openwrt/openwrt -> openwrt-25.12'
+          - 'openwrt/openwrt -> openwrt-24.10'
+          - 'openwrt/openwrt -> openwrt-23.05'
+          - 'LiBwrt/LibWrt -> 25.12-nss'
+          - 'JuliusBairaktaris/openwrt-ppe-nss -> ppe-nss'
+      config_files:
+        description: '配置文件（myconfig），多配置逗号隔开'
+        required: true
+        default: 'qualcommbe-ipq53xx-VIKINGYFY.config'
+
+      set_kernel_version:
+        description: '切换内核主版本'
+        required: true
+        default: 'false'
+        type: choice
+        options: [true, false]
+
+      kernel_version:
+        description: '自定义内核主版本（如 6.6）'
+        required: false
+        default: '6.6'
+
+      update_kernel:
+        description: '更新内核小版本至最新'
+        required: true
+        default: 'false'
+        type: choice
+        options: [true, false]
+
+      set_lan_ip:
+        description: '修改LAN IP'
+        required: true
+        default: 'false'
+        type: choice
+        options: [true, false]
+
+      lan_ip:
+        description: '自定义LAN IP'
+        required: false
+        default: '192.168.87.1'
+
+      hostname:
+        description: '自定义主机名'
+        required: false
+        default: 'OpenWrt'
+
+      enable_ccache:
+        description: '启用ccache缓存'
+        required: true
+        default: 'true'
+        type: choice
+        options: [true, false]
+
+      do_cleanup:
+        description: '清理系统环境'
+        required: true
+        default: 'false'
+        type: choice
+        options: [true, false]
+
+      enable_ssh:
+        description: '开启SSH调试'
+        required: true
+        default: 'false'
+        type: choice
+        options: [true, false]
+
+      do_release:
+        description: '编译后创建Release'
+        required: true
+        default: 'true'
+        type: choice
+        options: [true, false]
+
+  schedule:
+    # 每周一 01:00（北京时间）/ 周日 17:00（UTC）自动编译
+    - cron: '0 17 * * 0'
+
+concurrency:
+  group: openwrt-build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REPO_OWNER: ${{ github.repository_owner }}
+  RUN_DATE: ${{ github.event.schedule && format('{0}', github.run_id) || github.run_id }}
+
+jobs:
+  prepare:
+    name: Prepare Build Matrix
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      source_repo: ${{ steps.resolve.outputs.source_repo }}
+      source_branch: ${{ steps.resolve.outputs.source_branch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve Source Repo & Branch
+        id: resolve
+        run: |
+          CHOICE="${{ github.event.inputs.source_branch }}"
+
+          # parse_choice: 从 "owner/repo -> branch" 或 "owner/repo → branch" 解析
+          if echo "$CHOICE" | grep -qE "( → | -> )"; then
+            SOURCE_OWNER=$(echo "$CHOICE" | sed -E 's/ *(→|->) *.*//' | sed 's/ *$//')
+            SOURCE_BRANCH=$(echo "$CHOICE" | sed -E 's/.*(→|->) *//' | sed 's/^ *//')
+          else
+            SOURCE_OWNER=""
+            SOURCE_BRANCH=""
+          fi
+
+          [ -z "$SOURCE_OWNER" ] && SOURCE_OWNER="VIKINGYFY/immortalwrt"
+
+          case "$SOURCE_OWNER" in
+            "VIKINGYFY/immortalwrt")   SOURCE_BRANCH="${SOURCE_BRANCH:-owrt}" ;;
+            "coolsnowwolf/lede")        SOURCE_BRANCH="${SOURCE_BRANCH:-master}" ;;
+            "immortalwrt/immortalwrt")  SOURCE_BRANCH="${SOURCE_BRANCH:-openwrt-25.12}" ;;
+            "openwrt/openwrt")          SOURCE_BRANCH="${SOURCE_BRANCH:-main}" ;;
+            "LiBwrt/LibWrt")            SOURCE_BRANCH="${SOURCE_BRANCH:-25.12-nss}" ;;
+            *"openwrt-ppe-nss"*)        SOURCE_BRANCH="${SOURCE_BRANCH:-ppe-nss}" ;;
+            *)                          SOURCE_BRANCH="${SOURCE_BRANCH:-main}" ;;
+          esac
+
+          echo "source_repo=${SOURCE_OWNER}" >> "$GITHUB_OUTPUT"
+          echo "source_branch=${SOURCE_BRANCH}" >> "$GITHUB_OUTPUT"
+
+          echo "=========================================="
+          echo "  Source : https://github.com/${SOURCE_OWNER}"
+          echo "  Branch : ${SOURCE_BRANCH}"
+          echo "=========================================="
+
+          if command -v jq >/dev/null 2>&1; then
+            echo ""
+            echo ">>> Real branches from GitHub API:"
+            curl -sL "https://api.github.com/repos/${SOURCE_OWNER}/branches?per_page=15" | \
+                jq -r '.[].name' | while read -r b; do
+              mark="  "
+              [ "$b" = "$SOURCE_BRANCH" ] && mark="▶ "
+              echo "  ${mark}${b}"
+            done
+          fi
+
+      - name: Build Matrix
+        id: set-matrix
+        run: |
+          CONFIG_INPUT="${{ github.event.inputs.config_files }}"
+          [ -z "$CONFIG_INPUT" ] && CONFIG_INPUT="x86.config"
+
+          IFS=',' read -ra CONFIGS <<< "$CONFIG_INPUT"
+          JSON="["
+          FIRST=1
+
+          for cfg in "${CONFIGS[@]}"; do
+            cfg="${cfg// /}"
+            if [ -z "$cfg" ]; then continue; fi
+            if [ $FIRST -eq 1 ]; then
+              FIRST=0
+            else
+              JSON="${JSON},"
+            fi
+            JSON="${JSON}\"${cfg}\""
+          done
+
+          JSON="${JSON}]"
+
+          echo "matrix={\"config\":${JSON}}" >> "$GITHUB_OUTPUT"
+          echo "Matrix configs: $JSON"
+
+  build:
+    needs: prepare
+    name: Build ${{ matrix.config }} (${{ needs.prepare.outputs.source_repo }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+
+    env:
+      REPO_URL: https://github.com/${{ needs.prepare.outputs.source_repo }}
+      REPO_BRANCH: ${{ needs.prepare.outputs.source_branch }}
+      CONFIG_FILE: ${{ matrix.config }}
+      SOURCE_LABEL: ${{ needs.prepare.outputs.source_repo }}
+      SOURCE_BRANCH: ${{ needs.prepare.outputs.source_branch }}
+      BUILD_DATE: ${{ github.run_number }}
+      DO_RELEASE: ${{ github.event.inputs.do_release || 'true' }}
+
+    steps:
+      - name: Show Task Info
+        run: |
+          echo "=========================================="
+          echo "  Repo   : ${{ env.REPO_URL }}"
+          echo "  Branch : ${{ env.REPO_BRANCH }}"
+          echo "  Config : ${{ env.CONFIG_FILE }}"
+          echo "  Kernel : ${{ github.event.inputs.set_kernel_version || 'false' }} / ${{ github.event.inputs.kernel_version || '6.6' }}"
+          echo "  LAN IP : ${{ github.event.inputs.set_lan_ip || 'false' }} / ${{ github.event.inputs.lan_ip || '192.168.87.1' }}"
+          echo "  ccache : ${{ github.event.inputs.enable_ccache || 'true' }}"
+          echo "  SSH    : ${{ github.event.inputs.enable_ssh || 'false' }}"
+          echo "=========================================="
+
+      - name: Show Server Info
+        run: |
+          echo "OS    : $(lsb_release -d | awk -F'\t' '{print $2}')"
+          echo "Kernel: $(uname -r)"
+          echo "CPU   : $(nproc) cores"
+          echo "Mem   : $(free -h | grep Mem | awk '{print $2}')"
+          df -hT /
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify Config File
+        run: |
+          if [ ! -f "myconfig/${{ env.CONFIG_FILE }}" ]; then
+            echo "::error::Config file myconfig/${{ env.CONFIG_FILE }} not found!"
+            ls myconfig/
+            exit 1
+          fi
+
+          echo "Config OK: myconfig/${{ env.CONFIG_FILE }}"
+
+      - name: Init Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          START=$(date +%s)
+          BEFORE_ROOT=$(df -k / | tail -1 | awk '{print $3}')
+
+          if [ "${{ github.event.inputs.do_cleanup }}" = "true" ]; then
+
+            docker image prune -a -f 2>/dev/null || true
+            UNUSED_DIRS=(
+              "/usr/local/lib/android"
+              "/usr/share/dotnet"
+              "/usr/share/swift"
+              "/opt/hostedtoolcache"
+              "/usr/share/miniconda"
+              "/opt/microsoft"
+              "/opt/az"
+              "/opt/google/chrome"
+              "/usr/lib/mono"
+              "/usr/lib/firefox"
+              "/home/linuxbrew"
+            )
+            for d in "${UNUSED_DIRS[@]}"; do
+              [ -e "$d" ] && sudo rm -rf "$d" 2>/dev/null || true
+            done
+
+
+            for GRP in android* azure* dotnet* google-cloud* mono-* libmono-*; do
+              dpkg -l "$GRP" 2>/dev/null | grep -q '^ii' && sudo apt-get purge -y "$GRP" 2>/dev/null || true
+            done
+            sudo apt-get autoremove -y 2>/dev/null || true
+            sudo apt-get clean
+          else
+            echo "已跳过预装环境清理"
+          fi
+
+          sudo apt-get update -y -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential clang cmake curl git wget sed grep jq ccache \
+            device-tree-compiler gawk genisoimage libncurses5-dev \
+            libc6-dev-i386 libncursesw5-dev zlib1g-dev libssl-dev \
+            python3 python3-pyelftools rsync subversion unzip xz-utils vim \
+            libgmp-dev libmpc-dev libmpfr-dev libelf-dev libdw-dev libbpf-dev \
+            libreadline-dev libglib2.0-dev libfuse-dev libtool haveged \
+            msmtp p7zip-full swig texinfo dos2unix patchelf fakeroot
+
+          sudo timedatectl set-timezone "Asia/Shanghai"
+
+          AFTER_ROOT=$(df -k / | tail -1 | awk '{print $3}')
+          FREED=$(( (BEFORE_ROOT - AFTER_ROOT) / 1024 ))
+          TOTAL=$(( $(date +%s) - START ))
+          echo "--- DONE: 释放 ${FREED}MB ($(( FREED/1024 ))GB), 耗时 ${TOTAL}s ---"
+          df -h /
+
+      - name: Clone OpenWrt Source
+        id: clone
+        run: |
+          git clone --depth=1 --single-branch --branch "${REPO_BRANCH}" \
+              "${REPO_URL}" openwrt
+
+          cd openwrt
+          echo "WRT_HASH=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Source: ${REPO_URL} (${REPO_BRANCH})"
+          echo "Hash: $(git rev-parse --short HEAD)"
+
+      - name: DL Restore
+        continue-on-error: true
+        uses: actions/cache/restore@main
+        with:
+          key: wrt-dl
+          path: openwrt/dl
+
+      - name: Enable Feeds & Update
+        working-directory: ./openwrt
+        run: |
+          sed -i 's/^#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
+
+          if ! grep -q "linkease/istore" ./feeds.conf.default 2>/dev/null; then
+            echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
+          fi
+
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Get Latest Tailscale Version
+        working-directory: ./openwrt
+        run: |
+          tailscale_latest_version=$(curl -s https://api.github.com/repos/tailscale/tailscale/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^v//')
+          echo "Latest Tailscale version: ${tailscale_latest_version}"
+          [ ! -d "./dl" ] && mkdir -p ./dl
+          TS_FILE="dl/tailscale-${tailscale_latest_version}.tar.gz"
+          [ -f "${TS_FILE}" ] || wget https://codeload.github.com/tailscale/tailscale/tar.gz/v${tailscale_latest_version} -O "${TS_FILE}"
+          tailscale_hash=$(sha256sum "${TS_FILE}" | awk '{ print $1 }')
+          echo "Tailscale hash: ${tailscale_hash}"
+          sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${tailscale_latest_version}/" feeds/packages/net/tailscale/Makefile
+          sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${tailscale_hash}/" feeds/packages/net/tailscale/Makefile
+
+      # - name: Update Tailscale & LuCI
+      #   working-directory: ./openwrt
+      #   run: |
+      #     # # Remove old tailscale package
+      #     # rm -rf ./feeds/packages/net/tailscale
+
+      #     # Remove old luci app if exists
+      #     rm -rf ./package/luci-app-tailscale-community
+      #     rm -rf ./feeds/luci/applications/luci-app-tailscale*
+      #     rm -rf ./package/luci-app-tailscale*
+
+      #     # # Clone latest tailscale package
+      #     # git clone --depth=1 https://github.com/GuNanOvO/openwrt-tailscale.git /tmp/openwrt-tailscale
+      #     # cp -r /tmp/openwrt-tailscale/package/tailscale ./feeds/packages/net/tailscale
+
+      #     # Clone latest luci app
+      #     git clone --depth=1 https://github.com/Tokisaki-Galaxy/luci-app-tailscale-community.git /tmp/luci-app-tailscale-community
+      #     cp -r /tmp/luci-app-tailscale-community/luci-app-tailscale-community ./package/luci-app-tailscale-community
+
+      #     # Cleanup
+      #     # rm -rf /tmp/openwrt-tailscale
+      #     rm -rf /tmp/luci-app-tailscale-community
+
+      #     # echo "=============================="
+      #     # echo "Installed Tailscale package:"
+      #     # echo "=============================="
+      #     # cat ./feeds/packages/net/tailscale/Makefile || true
+
+      #     echo "=============================="
+      #     echo "Installed LuCI app:"
+      #     echo "=============================="
+      #     cat ./package/luci-app-tailscale-community/Makefile || true
+
+      #     ./scripts/feeds install -a -f
+
+      # - name: Add Tailscale Luci
+      #   working-directory: ./openwrt
+      #   run: |
+      #     sed -i '/\/etc\/init\.d\/tailscale/d;/\/etc\/config\/tailscale/d;' feeds/packages/net/tailscale/Makefile
+      #     git clone https://github.com/asvow/luci-app-tailscale package/luci-app-tailscale
+
+      # - name: Update OpenClash LuCI
+      #   working-directory: ./openwrt
+      #   run: |
+      #     # 1. 彻底清理旧路径，防止 feeds 里的旧版本残留
+      #     rm -rf ./package/luci-app-openclash
+      #     rm -rf ./package/feeds/luci/luci-app-openclash
+      #     rm -rf ./package/lean/luci-app-openclash
+      #     rm -rf ./feeds/luci/applications/luci-app-openclash
+
+      #     # 2. 拉取整个仓库到临时目录
+      #     # 使用 --depth=1 依然是推荐的，因为你只需要最新的源码
+      #     git clone --depth=1 https://github.com/vernesong/OpenClash.git /tmp/openclash_source
+
+      #     # 3. 将嵌套的插件目录移动到编译系统的 package 目录
+      #     # 这样直接解决了你说的“目录嵌套”问题
+      #     cp -r /tmp/openclash_source/luci-app-openclash ./package/luci-app-openclash
+
+      #     # 4. 清理临时拉取的源码
+      #     rm -rf /tmp/openclash_source
+
+      #     # 5. 打印版本号确认，方便在 Action 日志里对账
+      #     echo "=============================="
+      #     grep "PKG_VERSION:=" ./package/luci-app-openclash/Makefile || echo "Version info not found"
+      #     echo "=============================="
+
+      #     # 6. 强制刷新，让 OpenWrt 识别到这个“手动放入”的新包
+      #     ./scripts/feeds install -a -f
+
+      # - name: Get Latest OpenVPN Version
+      #   working-directory: ./openwrt
+      #   run: |
+      #     openvpn_latest_version=$(curl -s https://build.openvpn.net/downloads/releases/ | grep -oP 'openvpn-\K[0-9]+\.[0-9]+\.[0-9]+' | sort -V | tail -n 1)
+      #     echo "Latest OpenVPN version: ${openvpn_latest_version}"
+      #     [ ! -d "./dl" ] && mkdir -p ./dl
+      #     wget https://build.openvpn.net/downloads/releases/openvpn-${openvpn_latest_version}.tar.gz -O dl/openvpn-${openvpn_latest_version}.tar.gz
+      #     openvpn_hash=$(sha256sum dl/openvpn-${openvpn_latest_version}.tar.gz | awk '{ print $1 }')
+
+      #     sed -i 's/PKG_SOURCE:=.*/PKG_SOURCE:=$(PKG_NAME)-$(PKG_VERSION)\.tar\.gz/' feeds/packages/net/openvpn/Makefile
+      #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${openvpn_latest_version}/" feeds/packages/net/openvpn/Makefile
+      #     sed -i "s/PKG_HASH:=.*/PKG_HASH:=${openvpn_hash}/" feeds/packages/net/openvpn/Makefile
+
+      # - name: Update OpenVPN
+      #   working-directory: ./
+      #   run: |
+      #     git clone https://github.com/openwrt/packages
+      #     rm -rf ./openwrt/feeds/packages/net/openvpn
+      #     cp -r ./packages/net/openvpn ./openwrt/feeds/packages/net/openvpn
+      #     cat ./openwrt/feeds/packages/net/openvpn/Makefile
+      #     rm -rf ./packages
+      #     git clone https://github.com/openwrt/luci
+      #     rm -rf ./openwrt/feeds/luci/applications/luci-app-openvpn
+      #     cp -r ./luci/applications/luci-app-openvpn ./openwrt/feeds/luci/applications/luci-app-openvpn
+      #     cat ./openwrt/feeds/luci/applications/luci-app-openvpn/Makefile
+      #     rm -rf ./luci
+
+      # - name: Get Latest Openssl Version
+      #   working-directory: ./openwrt
+      #   run: |
+      #     openssl_latest_version=$(curl -s https://api.github.com/repos/openssl/openssl/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^openssl-//')
+      #     openssl_latest_version=3.0.15
+      #     echo "Latest Openssl version: ${openssl_latest_version}"
+      #     [ ! -d "./dl" ] && mkdir -p ./dl
+      #     wget https://github.com/openssl/openssl/releases/download/openssl-${openssl_latest_version}/openssl-${openssl_latest_version}.tar.gz -O dl/openssl-${openssl_latest_version}.tar.gz
+      #     openssl_hash=$(sha256sum dl/openssl-${openssl_latest_version}.tar.gz | awk '{ print $1 }')
+
+      #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${openssl_latest_version}/" package/libs/openssl/Makefile
+      #     sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${openssl_hash}/" package/libs/openssl/Makefile
+
+      # - name: Get Latest ZeroTierOne Version
+      #   working-directory: ./openwrt
+      #   run: |
+      #     zerotier_latest_version=$(curl -s https://api.github.com/repos/zerotier/zerotierone/releases/latest | grep 'tag_name' | cut -d '"' -f 4 | sed 's/^v//')
+      #     echo "Latest ZeroTierOne version: ${zerotier_latest_version}"
+      #     [ ! -d "./dl" ] && mkdir -p ./dl
+      #     wget https://codeload.github.com/zerotier/zerotierone/tar.gz/${zerotier_latest_version} -O dl/ZeroTierOne-${zerotier_latest_version}.tar.gz
+      #     zerotier_hash=$(sha256sum dl/ZeroTierOne-${zerotier_latest_version}.tar.gz | awk '{ print $1 }')
+
+      #     sed -i "s/PKG_VERSION:=.*/PKG_VERSION:=${zerotier_latest_version}/" feeds/packages/net/zerotier/Makefile
+      #     sed -i "s/^PKG_HASH:=.*/PKG_HASH:=${zerotier_hash}/" feeds/packages/net/zerotier/Makefile
+
+
+      - name: Set Kernel Version
+        if: github.event.inputs.set_kernel_version == 'true'
+        working-directory: ./openwrt
+        run: |
+          KVER="${{ github.event.inputs.kernel_version }}"
+          if [ -d "./target/linux/x86/patches-${KVER}" ]; then
+            TARGET_DIR="./target/linux/x86"
+          elif [ -d "./target/linux/qualcommax/patches-${KVER}" ]; then
+            TARGET_DIR="./target/linux/qualcommax"
+          elif [ -d "./target/linux/ramips/patches-${KVER}" ]; then
+            TARGET_DIR="./target/linux/ramips"
+          elif [ -d "./target/linux/ath79/patches-${KVER}" ]; then
+            TARGET_DIR="./target/linux/ath79"
+          else
+            TARGET_DIR=$(find ./target/linux -maxdepth 1 -type d -name "patches-${KVER}" | head -1 | xargs dirname 2>/dev/null || echo "")
+          fi
+          if [ -n "$TARGET_DIR" ] && [ -f "$TARGET_DIR/Makefile" ]; then
+            sed -i 's/^KERNEL_PATCHVER:=.*/KERNEL_PATCHVER:='${KVER}'/g' "$TARGET_DIR/Makefile"
+            sed -i 's/^KERNEL_TESTING_PATCHVER:=.*/KERNEL_TESTING_PATCHVER:='${KVER}'/g' "$TARGET_DIR/Makefile"
+            echo "Set kernel to ${KVER} in ${TARGET_DIR}"
+          else
+            echo "::warning::Kernel patches-${KVER} not found, skipping."
+          fi
+
+      - name: Custom Settings
+        working-directory: ./openwrt
+        run: |
+          if [ "${{ github.event.inputs.set_lan_ip }}" = "true" ]; then
+            for f in package/base-files/files/bin/config_generate package/base-files/luci2/bin/config_generate feeds/luci/modules/luci-mod-system/htdocs/luci-static/luci/flash.js; do
+              [ -f "$f" ] && sed -i "s/192\.168\.[0-9]*\.[0-9]*/${{ github.event.inputs.lan_ip }}/g" "$f"
+            done
+          fi
+
+          [ -f package/base-files/files/bin/config_generate ] && \
+            sed -i "s/hostname='.*'/hostname='${{ github.event.inputs.hostname }}'/g" package/base-files/files/bin/config_generate
+
+          [ -f scripts/projectsmirrors.json ] && \
+            sed -i '/\.cn\//d; /tencent/d; /aliyun/d; /ustc/d; /huawei/d' scripts/projectsmirrors.json
+
+      - name: Import Config & Update
+        working-directory: ./openwrt
+        run: |
+          cp -f "../myconfig/${{ env.CONFIG_FILE }}" .config
+          make defconfig
+
+      - name: Launch SSH
+        if: github.event.inputs.enable_ssh == 'true'
+        working-directory: ./openwrt
+        run: |
+          echo "退出执行: pkill -f sshx"
+          curl -sSf https://sshx.io/get | sh -s run
+
+      - name: Download Packages
+        working-directory: ./openwrt
+        run: |
+          make download -j16
+          gh cache list --key wrt-dl --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>/dev/null || true
+
+      - name: Save DL Cache
+        continue-on-error: true
+        if: github.event.inputs.enable_ccache != 'false' && success()
+        uses: actions/cache/save@main
+        with:
+          key: wrt-dl
+          path: openwrt/dl
+
+      - name: Show DL Size（Before Save）
+        working-directory: ./openwrt
+        run: du -sh dl/
+
+      - name: Compute Tools + Toolchian Cache Keys
+        id: compute-cache-keys
+        working-directory: ./openwrt
+        run: |
+          TARGET=$(grep -m1 -oP '^CONFIG_TARGET_\K[^=_]+(?==y)' "../myconfig/${{ env.CONFIG_FILE }}" || echo "unknown")
+          SUBTARGET=$(grep -m1 -oP "^CONFIG_TARGET_${TARGET}_\K[^=_]+(?==y)" "../myconfig/${{ env.CONFIG_FILE }}" || echo "unknown")
+          TOOLS_HASH=$(git log --pretty=tformat:"%h" -n1 tools 2>/dev/null || echo "unknown")
+          TC_HASH=$(git log --pretty=tformat:"%h" -n1 tools toolchain 2>/dev/null || echo "unknown")
+          TOOLS_KEY="wrt-tools-${TOOLS_HASH}"
+          TC_KEY="wrt-toolchain-${TARGET}-${SUBTARGET}-${TC_HASH}"
+          echo "Tools cache key : ${TOOLS_KEY}"
+          echo "Toolchain cache key: ${TC_KEY}"
+          echo "tools_key=${TOOLS_KEY}" >> "$GITHUB_OUTPUT"
+          echo "tc_key=${TC_KEY}" >> "$GITHUB_OUTPUT"
+
+      - name: Tools Cache Restore
+        continue-on-error: true
+        if: github.event.inputs.enable_ccache != 'false'
+        uses: actions/cache/restore@main
+        with:
+          key: ${{ steps.compute-cache-keys.outputs.tools_key }}
+          path: openwrt/staging_dir/host*
+
+      - name: Toolchain Cache Restore
+        continue-on-error: true
+        if: github.event.inputs.enable_ccache != 'false'
+        uses: actions/cache/restore@main
+        with:
+          key: ${{ steps.compute-cache-keys.outputs.tc_key }}
+          path: |
+            openwrt/.ccache
+            openwrt/staging_dir/tool*
+
+      - name: Build Tools + Toolchain
+        if: github.event.inputs.enable_ccache != 'false'
+        working-directory: ./openwrt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          find ./staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | \
+              while read -r d; do find "$d" -type f -exec touch {} +; done
+          mkdir -p tmp && echo "1" > tmp/.build
+          make prepare -j$(nproc)
+          df -h
+          du -sh staging_dir/host* staging_dir/tool* 2>/dev/null
+
+          gh cache list --key "${{ steps.compute-cache-keys.outputs.tools_key }}" --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>/dev/null || true
+          gh cache list --key "${{ steps.compute-cache-keys.outputs.tc_key }}" --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>/dev/null || true
+
+      - name: Save Tools Cache
+        continue-on-error: true
+        if: github.event.inputs.enable_ccache != 'false' && success()
+        uses: actions/cache/save@main
+        with:
+          key: ${{ steps.compute-cache-keys.outputs.tools_key }}
+          path: openwrt/staging_dir/host*
+
+      - name: Save Toolchain Cache
+        continue-on-error: true
+        if: github.event.inputs.enable_ccache != 'false' && success()
+        uses: actions/cache/save@main
+        with:
+          key: ${{ steps.compute-cache-keys.outputs.tc_key }}
+          path: |
+            openwrt/.ccache
+            openwrt/staging_dir/tool*
+
+      - name: Compile Firmware
+        working-directory: ./openwrt
+        run: |
+          make -j$(nproc) || make -j1 V=s
+          df -h
+          echo "bin/:"
+          du -h --max-depth=1 bin/ 2>/dev/null | head -20
+
+      - name: Clean Old Caches (30-day policy)
+        continue-on-error: true
+        if: github.event.inputs.enable_ccache != 'false' && success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CUTOFF=$(date -d '30 days ago' +%s 2>/dev/null || date -v-30d +%s 2>/dev/null || echo "0")
+          echo "Cleaning wrt-* caches older than 30 days..."
+          echo "Cutoff timestamp: ${CUTOFF}"
+
+          PAGE=1
+          while true; do
+            JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100&page=${PAGE}")
+            LINES=$(echo "$JSON" | jq -r '.actions_caches[]? | "\(.id)\t\(.key)\t\(.created_at)"' 2>/dev/null)
+            [ -z "$LINES" ] && break
+
+            echo "$LINES" | while IFS=$'\t' read -r ID KEY CREATED; do
+              case "$KEY" in
+                wrt-tools-*|wrt-toolchain-*|wrt-dl) ;;
+                *) continue ;;
+              esac
+              TS=$(date -d "$CREATED" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$CREATED" +%s 2>/dev/null || echo "0")
+              if [ "$TS" -lt "$CUTOFF" ] 2>/dev/null; then
+                SIZE=$(curl -s -H "Authorization: token $GH_TOKEN" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" | jq -r '.size_in_bytes // 0')
+                echo "  DEL   $KEY  ($(( SIZE / 1048576 )) MB, $(date -d @$TS +%Y-%m-%d))"
+                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
+              fi
+            done
+
+            PAGE=$((PAGE + 1))
+            [ "$PAGE" -gt 10 ] && break
+          done
+          echo "Cache cleanup done"
+
+      - name: Organize Artifacts
+        id: organize
+        working-directory: ./openwrt
+        run: |
+          mkdir -p upload
+
+          tar -czf "upload/firmware-full-${{ matrix.config }}.tar.gz" -C bin . 2>/dev/null || true
+
+          find ./bin/targets -type f \( -name "*.bin" -o -name "*.trx" -o -name "*.itb" \
+              -o -name "*.img" -o -name "*.ubi" -o -name "*.ufs" -o -name "*.sdcard" \
+              -o -name "*.rootfs" -o -name "*.sysupgrade" -o -name "*.factory" \
+              -o -name "*.combined" -o -name "*.ext4" -o -name "*.squashfs" \
+              -o -name "*.gz" -o -name "*.xz" -o -name "*.zip" \
+              -o -name "*.bin.asc" -o -name "*.trx.asc" \) \
+              -exec cp -f {} upload/ \; 2>/dev/null || true
+
+          find ./bin/packages -type f -name "*.ipk" -exec cp -f {} upload/ \; 2>/dev/null || true
+
+          find ./bin/targets -type f \( -name "*.buildinfo" -o -name "*.manifest" -o -name "*.sha256sums" \) \
+              -exec cp -f {} upload/ \; 2>/dev/null || true
+
+          ls -lh upload/ | tail -n +2
+          echo "=== Manifest content ==="
+          grep -oP '^kernel - \K[\d\.]+' upload/*.manifest 2>/dev/null | head -1 || true
+
+          echo "KVER=$(grep -oP '^kernel - \K[\d\.]+' upload/*.manifest 2>/dev/null | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Firmware Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: firmware-${{ matrix.config }}-${{ github.run_number }}
+          path: openwrt/upload/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create Release
+        if: env.DO_RELEASE == 'true' && success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: firmware/${{ matrix.config }}-${{ github.run_number }}
+          name: '${{ matrix.config }} | ${{ env.SOURCE_LABEL }} | Run #${{ github.run_number }}'
+          files: openwrt/upload/*
+          body: |
+            **Config**: `${{ matrix.config }}`
+            **Source**: `${{ env.REPO_URL }}`
+            **Branch**: `${{ env.REPO_BRANCH }}`
+            **Kernel**: `${{ steps.organize.outputs.KVER || 'unknown' }}`
+            **Run**: #${{ github.run_number }}
+            **Commit**: ${{ github.sha }}
+            **Date**: $(date '+%Y-%m-%d %H:%M')
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

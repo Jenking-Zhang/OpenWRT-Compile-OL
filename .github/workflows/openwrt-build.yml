@@ -538,8 +538,8 @@ jobs:
         run: |
           TARGET=$(grep -m1 -oP '^CONFIG_TARGET_\K[^=_]+(?==y)' "../myconfig/${{ env.CONFIG_FILE }}" || echo "unknown")
           SUBTARGET=$(grep -m1 -oP "^CONFIG_TARGET_${TARGET}_\K[^=_]+(?==y)" "../myconfig/${{ env.CONFIG_FILE }}" || echo "unknown")
-          TOOLS_HASH=$(git log --pretty=tformat:"%h" -n1 tools 2>/dev/null || echo "unknown")
-          TC_HASH=$(git log --pretty=tformat:"%h" -n1 tools toolchain 2>/dev/null || echo "unknown")
+          TOOLS_HASH=$(git archive HEAD tools 2>/dev/null | sha256sum | cut -c1-7 || echo "unknown")
+          TC_HASH=$(git archive HEAD tools toolchain 2>/dev/null | sha256sum | cut -c1-7 || echo "unknown")
           TOOLS_KEY="wrt-tools-${TOOLS_HASH}"
           TC_KEY="wrt-toolchain-${TARGET}-${SUBTARGET}-${TC_HASH}"
           echo "Tools cache key : ${TOOLS_KEY}"

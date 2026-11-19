@@ -10,12 +10,14 @@ on:
         description: '配置文件下拉（myconfig/）'
         required: false
         type: choice
-        default: ''
+        default: 'qualcommbe_ipq53xx_jdcloud-re-cs-06_coolsnowwolf_master.config'
         options:
-          - 'qualcommbe-ipq53xx-VIKINGYFY.config'
-          - 'cr660x.config'
-          - 'cr660x-mt.config'
-          - 'x86.config'
+          - 'qualcommax_ipq807x_linksys-homewrk_VIKINGYFY_owrt.config'
+          - 'qualcommbe_ipq53xx_jdcloud-re-cs-06_coolsnowwolf_master.config'
+          - 'qualcommbe_ipq53xx_jdcloud-re-cs-06_VIKINGYFY_owrt.config'
+          - 'x86_64_generic_coolsnowwolf_master.config'
+          - 'x86_64_generic_VIKINGYFY_owrt.config'
+
       config_extra:
         description: '自定义配置（逗号分隔多个；优先级高于下拉；留空=用下拉）'
         required: false
@@ -120,7 +122,7 @@ jobs:
             CONFIG_INPUT="$DROPDOWN"
           fi
 
-          [ -z "$CONFIG_INPUT" ] && CONFIG_INPUT="qualcommbe-ipq53xx-VIKINGYFY.config"
+          [ -z "$CONFIG_INPUT" ] && CONFIG_INPUT="qualcommbe_ipq53xx_jdcloud-re-cs-06_VIKINGYFY_owrt.config,qualcommax_ipq807x_linksys-homewrk_VIKINGYFY_owrt.config,x86_64_generic_VIKINGYFY_owrt.config"
           echo "Config source: config_extra='${EXTRA}' → using '${CONFIG_INPUT}'"
 
           IFS=',' read -ra CONFIGS <<< "$CONFIG_INPUT"

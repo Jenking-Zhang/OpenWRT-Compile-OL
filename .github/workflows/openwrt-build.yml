@@ -528,7 +528,7 @@ jobs:
           key: wrt-dl
           path: openwrt/dl
 
-      - name: Show DL Size（Before Save）
+      - name: Show DL Size
         working-directory: ./openwrt
         run: du -sh dl/
 

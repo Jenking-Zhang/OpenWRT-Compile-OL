@@ -7,9 +7,12 @@ on:
   workflow_dispatch:
     inputs:
       config_files:
-        description: '配置文件（myconfig/），多配置逗号隔开；文件名格式: TARGET-SUBTARGET-[TAG-]SHORT_REPO-BRANCH.config（仓库和分支从文件名自动解析）'
+        description: '配置文件（myconfig/），下拉选择；支持逗号组合多配置（如 a.config,b.config）'
         required: true
+        type: choice
         default: ''
+        options:
+          # __AUTO_UPDATED__ - generate-config 每次保存后自动更新此列表
 
       set_kernel_version:
         description: '切换内核主版本'

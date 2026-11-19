@@ -160,41 +160,35 @@ jobs:
       - name: Resolve Source From Filename
         id: resolve
         run: |
-          # 文件名格式 (强制): TARGET-SUBTARGET-SHORT_REPO-BRANCH[_TAG].config
-          # SHORT_REPO 和 BRANCH 强制；TAG 可选 (_ 分隔, TAG 内可含 hyphen)
+          # 文件名格式 (强制): TARGET_SUBTARGET[_TAG]_SHORT_REPO_BRANCH.config
+          # 全下划线分隔, REPO/BRANCH 在最后两位, TAG 可选 (可含 hyphen)
+          # 例: qualcommbe_ipq53xx_JDC-BE6500_VIKINGYFY_owrt.config
           STEM="${CONFIG_FILE%.config}"
 
           REPO_NAMES="VIKINGYFY JuliusBairaktaris coolsnowwolf immortalwrt openwrt LiBwrt"
 
+          # BRANCH = 最后一段 (最后一个 _ 之后)
+          BRANCH="${STEM##*_}"
+
+          # 找 REPO: 后缀必须是 "_${repo}_${BRANCH}"
           MATCHED_REPO=""
           for repo in $REPO_NAMES; do
-            if [[ "$STEM" == *-${repo}-* ]]; then
+            if [[ "$STEM" == *"_${repo}_${BRANCH}" ]]; then
               MATCHED_REPO="$repo"
               break
             fi
           done
 
           [ -z "$MATCHED_REPO" ] && {
-            echo "ERROR: cannot parse SHORT_REPO from '${CONFIG_FILE}'"
-            echo "  Required: TARGET-SUBTARGET-SHORT_REPO-BRANCH[_TAG].config"
-            echo "  Example: qualcommbe-ipq53xx-VIKINGYFY-owrt_JDC-BE6500.config"
+            echo "ERROR: cannot parse SHORT_REPO / BRANCH from '${CONFIG_FILE}'"
+            echo "  Required format: TARGET_SUBTARGET[_TAG]_SHORT_REPO_BRANCH.config"
+            echo "  Example: qualcommbe_ipq53xx_JDC-BE6500_VIKINGYFY_owrt.config"
             echo "  Known repos: $REPO_NAMES"
             exit 1
           }
 
-          # repo 锚点之后: _ 之前是 BRANCH, _ 之后是 TAG (忽略)
-          AFTER_REPO="${STEM#*-${MATCHED_REPO}-}"
-
-          if [[ "$AFTER_REPO" == *_* ]]; then
-            # 有 TAG (下划线分隔): BRANCH 到第一个 _ 为止
-            BRANCH="${AFTER_REPO%%_*}"
-          else
-            # 无 TAG: 全部就是 BRANCH
-            BRANCH="$AFTER_REPO"
-          fi
-
           [ -z "$BRANCH" ] && {
-            echo "ERROR: empty BRANCH after '${MATCHED_REPO}-' in '${CONFIG_FILE}'"
+            echo "ERROR: empty BRANCH in '${CONFIG_FILE}'"
             exit 1
           }
 

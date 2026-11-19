@@ -14,6 +14,7 @@ on:
         default: ''
         options:
           # __AUTO_UPDATED__ - generate-config 每次保存后自动更新此列表
+          - 'placeholder.config'
 
       set_kernel_version:
         description: '切换内核主版本'

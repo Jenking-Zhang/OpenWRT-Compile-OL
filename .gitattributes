@@ -1,0 +1,8 @@
+# Force LF for workflow files (critical - bash heredoc breaks with CRLF)
+.github/workflows/*.yml text eol=lf
+.github/workflows/*.yaml text eol=lf
+
+# Default LF for text files
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf

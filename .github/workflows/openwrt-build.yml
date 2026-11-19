@@ -160,7 +160,8 @@ jobs:
       - name: Resolve Source From Filename
         id: resolve
         run: |
-          # 文件名格式 (强制): TARGET-SUBTARGET-[TAG-]SHORT_REPO-BRANCH.config
+          # 文件名格式 (强制): TARGET-SUBTARGET-SHORT_REPO-BRANCH[-TAG].config
+          # SHORT_REPO 和 BRANCH 强制；TAG 可选 (最后一段，以 - 分割)
           STEM="${CONFIG_FILE%.config}"
 
           REPO_NAMES="VIKINGYFY JuliusBairaktaris coolsnowwolf immortalwrt openwrt LiBwrt"
@@ -175,18 +176,25 @@ jobs:
 
           [ -z "$MATCHED_REPO" ] && {
             echo "ERROR: cannot parse SHORT_REPO from '${CONFIG_FILE}'"
-            echo "  Required format: TARGET-SUBTARGET-[TAG-]SHORT_REPO-BRANCH.config"
+            echo "  Required: TARGET-SUBTARGET-SHORT_REPO-BRANCH[-TAG].config"
             echo "  Example: qualcommbe-ipq53xx-VIKINGYFY-owrt.config"
             echo "  Known repos: $REPO_NAMES"
             exit 1
           }
 
-          BRANCH="${STEM#*-${MATCHED_REPO}-}"
+          # repo 锚点之后: 最后一段如果有 - 则为 TAG，前面拼起来是 BRANCH
+          AFTER_REPO="${STEM#*-${MATCHED_REPO}-}"
 
-          # BRANCH 不能为空
+          if [[ "$AFTER_REPO" == *-* ]]; then
+            # 有 TAG: 最后一段是 TAG (忽略)，前面是 BRANCH
+            BRANCH="${AFTER_REPO%-*}"
+          else
+            # 无 TAG: 唯一一段就是 BRANCH
+            BRANCH="$AFTER_REPO"
+          fi
+
           [ -z "$BRANCH" ] && {
-            echo "ERROR: no BRANCH suffix after '${MATCHED_REPO}-' in '${CONFIG_FILE}'"
-            echo "  Required: SHORT_REPO-BRANCH (e.g. VIKINGYFY-owrt)"
+            echo "ERROR: empty BRANCH after '${MATCHED_REPO}-' in '${CONFIG_FILE}'"
             exit 1
           }
 

@@ -152,7 +152,7 @@ jobs:
           if [ -n "$OVERRIDE" ]; then
             FINAL_NAME="$OVERRIDE"
           elif [ -n "$TAG" ]; then
-            FINAL_NAME="${TARGET}-${SUBTARGET}-${TAG}-${SHORT_REPO}-${SOURCE_BRANCH}.config"
+            FINAL_NAME="${TARGET}-${SUBTARGET}-${SHORT_REPO}-${SOURCE_BRANCH}-${TAG}.config"
           else
             FINAL_NAME="${TARGET}-${SUBTARGET}-${SHORT_REPO}-${SOURCE_BRANCH}.config"
           fi

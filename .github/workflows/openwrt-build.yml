@@ -12,6 +12,7 @@ on:
         type: choice
         default: ''
         options:
+          - ''
           - 'qualcommax_ipq807x_linksys-homewrk_VIKINGYFY_owrt.config'
           - 'qualcommbe_ipq53xx_jdcloud-re-cs-06_coolsnowwolf_master.config'
           - 'qualcommbe_ipq53xx_jdcloud-re-cs-06_VIKINGYFY_owrt.config'
@@ -21,7 +22,7 @@ on:
       config_extra:
         description: '自定义配置（逗号分隔多个；优先级高于下拉；留空=用下拉）'
         required: false
-        default: ''
+        default: 'qualcommbe_ipq53xx_jdcloud-re-cs-06_VIKINGYFY_owrt.config,qualcommax_ipq807x_linksys-homewrk_VIKINGYFY_owrt.config,x86_64_generic_VIKINGYFY_owrt.config'
 
       set_kernel_version:
         description: '切换内核主版本'

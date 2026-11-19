@@ -87,6 +87,7 @@ jobs:
 
           SHORT_REPO=$(echo "$SOURCE_OWNER" | cut -d'/' -f1)
           echo "source_owner=${SOURCE_OWNER}" >> "$GITHUB_OUTPUT"
+          echo "source_branch=${SOURCE_BRANCH}" >> "$GITHUB_OUTPUT"
           echo "short_repo=${SHORT_REPO}" >> "$GITHUB_OUTPUT"
           echo "Cloning ${SOURCE_OWNER} @ ${SOURCE_BRANCH} ..."
           git clone --depth=1 --single-branch --branch "${SOURCE_BRANCH}" "https://github.com/${SOURCE_OWNER}" openwrt
@@ -210,6 +211,7 @@ jobs:
         working-directory: ./openwrt
         run: |
           SHORT_REPO="${{ steps.clone.outputs.short_repo }}"
+          SOURCE_BRANCH="${{ steps.clone.outputs.source_branch }}"
           TAG="${{ steps.import-config.outputs.custom_tag }}"
           OVERRIDE="${{ github.event.inputs.filename_override }}"
 
@@ -222,9 +224,9 @@ jobs:
           if [ -n "$OVERRIDE" ]; then
             FINAL_NAME="$OVERRIDE"
           elif [ -n "$TAG" ]; then
-            FINAL_NAME="${TARGET}-${SUBTARGET}-${TAG}-${SHORT_REPO}.config"
+            FINAL_NAME="${TARGET}-${SUBTARGET}-${TAG}-${SHORT_REPO}-${SOURCE_BRANCH}.config"
           else
-            FINAL_NAME="${TARGET}-${SUBTARGET}-${SHORT_REPO}.config"
+            FINAL_NAME="${TARGET}-${SUBTARGET}-${SHORT_REPO}-${SOURCE_BRANCH}.config"
           fi
 
           echo "Saving to myconfig/${FINAL_NAME} (${TARGET}/${SUBTARGET})"

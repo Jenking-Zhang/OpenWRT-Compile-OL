@@ -6,29 +6,10 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
-      source_branch:
-        description: '指定源码仓库 + 分支'
-        required: true
-        default: 'VIKINGYFY/immortalwrt -> owrt'
-        type: choice
-        options:
-          - 'VIKINGYFY/immortalwrt -> owrt'
-          - 'VIKINGYFY/immortalwrt -> main'
-          - 'coolsnowwolf/lede -> master'
-          - 'immortalwrt/immortalwrt -> master'
-          - 'immortalwrt/immortalwrt -> openwrt-25.12'
-          - 'immortalwrt/immortalwrt -> openwrt-24.10'
-          - 'immortalwrt/immortalwrt -> openwrt-23.05'
-          - 'openwrt/openwrt -> main'
-          - 'openwrt/openwrt -> openwrt-25.12'
-          - 'openwrt/openwrt -> openwrt-24.10'
-          - 'openwrt/openwrt -> openwrt-23.05'
-          - 'LiBwrt/LibWrt -> 25.12-nss'
-          - 'JuliusBairaktaris/openwrt-ppe-nss -> ppe-nss'
       config_files:
-        description: '配置文件（myconfig），多配置逗号隔开'
+        description: '配置文件（myconfig/），多配置逗号隔开；文件名格式: TARGET-SUBTARGET-[TAG-]SHORT_REPO-BRANCH.config（仓库和分支从文件名自动解析）'
         required: true
-        default: 'qualcommbe-ipq53xx-VIKINGYFY.config'
+        default: ''
 
       set_kernel_version:
         description: '切换内核主版本'
@@ -112,62 +93,16 @@ jobs:
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
-      source_repo: ${{ steps.resolve.outputs.source_repo }}
-      source_branch: ${{ steps.resolve.outputs.source_branch }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
-
-      - name: Resolve Source Repo & Branch
-        id: resolve
-        run: |
-          CHOICE="${{ github.event.inputs.source_branch }}"
-
-          # parse_choice: 从 "owner/repo -> branch" 或 "owner/repo → branch" 解析
-          if echo "$CHOICE" | grep -qE "( → | -> )"; then
-            SOURCE_OWNER=$(echo "$CHOICE" | sed -E 's/ *(→|->) *.*//' | sed 's/ *$//')
-            SOURCE_BRANCH=$(echo "$CHOICE" | sed -E 's/.*(→|->) *//' | sed 's/^ *//')
-          else
-            SOURCE_OWNER=""
-            SOURCE_BRANCH=""
-          fi
-
-          [ -z "$SOURCE_OWNER" ] && SOURCE_OWNER="VIKINGYFY/immortalwrt"
-
-          case "$SOURCE_OWNER" in
-            "VIKINGYFY/immortalwrt")   SOURCE_BRANCH="${SOURCE_BRANCH:-owrt}" ;;
-            "coolsnowwolf/lede")        SOURCE_BRANCH="${SOURCE_BRANCH:-master}" ;;
-            "immortalwrt/immortalwrt")  SOURCE_BRANCH="${SOURCE_BRANCH:-openwrt-25.12}" ;;
-            "openwrt/openwrt")          SOURCE_BRANCH="${SOURCE_BRANCH:-main}" ;;
-            "LiBwrt/LibWrt")            SOURCE_BRANCH="${SOURCE_BRANCH:-25.12-nss}" ;;
-            *"openwrt-ppe-nss"*)        SOURCE_BRANCH="${SOURCE_BRANCH:-ppe-nss}" ;;
-            *)                          SOURCE_BRANCH="${SOURCE_BRANCH:-main}" ;;
-          esac
-
-          echo "source_repo=${SOURCE_OWNER}" >> "$GITHUB_OUTPUT"
-          echo "source_branch=${SOURCE_BRANCH}" >> "$GITHUB_OUTPUT"
-
-          echo "=========================================="
-          echo "  Source : https://github.com/${SOURCE_OWNER}"
-          echo "  Branch : ${SOURCE_BRANCH}"
-          echo "=========================================="
-
-          if command -v jq >/dev/null 2>&1; then
-            echo ""
-            echo ">>> Real branches from GitHub API:"
-            curl -sL "https://api.github.com/repos/${SOURCE_OWNER}/branches?per_page=15" | \
-                jq -r '.[].name' | while read -r b; do
-              mark="  "
-              [ "$b" = "$SOURCE_BRANCH" ] && mark="▶ "
-              echo "  ${mark}${b}"
-            done
-          fi
 
       - name: Build Matrix
         id: set-matrix
         run: |
           CONFIG_INPUT="${{ github.event.inputs.config_files }}"
-          [ -z "$CONFIG_INPUT" ] && CONFIG_INPUT="x86.config"
+          [ -z "$CONFIG_INPUT" ] && CONFIG_INPUT="qualcommbe-ipq53xx-VIKINGYFY-owrt.config"
+          echo "Config input: ${CONFIG_INPUT}"
 
           IFS=',' read -ra CONFIGS <<< "$CONFIG_INPUT"
           JSON="["
@@ -191,22 +126,67 @@ jobs:
 
   build:
     needs: prepare
-    name: Build ${{ matrix.config }} (${{ needs.prepare.outputs.source_repo }})
+    name: Build ${{ matrix.config }}
     runs-on: ubuntu-22.04
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
 
     env:
-      REPO_URL: https://github.com/${{ needs.prepare.outputs.source_repo }}
-      REPO_BRANCH: ${{ needs.prepare.outputs.source_branch }}
       CONFIG_FILE: ${{ matrix.config }}
-      SOURCE_LABEL: ${{ needs.prepare.outputs.source_repo }}
-      SOURCE_BRANCH: ${{ needs.prepare.outputs.source_branch }}
       BUILD_DATE: ${{ github.run_number }}
       DO_RELEASE: ${{ github.event.inputs.do_release || 'true' }}
 
     steps:
+      - name: Resolve Source From Filename
+        id: resolve
+        run: |
+          # 文件名格式: TARGET-SUBTARGET-[TAG-]SHORT_REPO-BRANCH.config
+          # SHORT_REPO 是已知单字, BRANCH 可能含 hyphen (openwrt-25.12, 25.12-nss)
+          STEM="${CONFIG_FILE%.config}"
+
+          # 已知 SHORT_REPO 列表 (按长度倒序匹配避免子串冲突)
+          REPO_NAMES="VIKINGYFY JuliusBairaktaris coolsnowwolf immortalwrt openwrt LiBwrt"
+
+          MATCHED_REPO=""
+          for repo in $REPO_NAMES; do
+            if [[ "$STEM" == *-${repo}-* ]]; then
+              MATCHED_REPO="$repo"
+              break
+            fi
+          done
+
+          if [ -z "$MATCHED_REPO" ]; then
+            echo "ERROR: cannot parse SHORT_REPO from '${CONFIG_FILE}'"
+            echo "  Expected format: TARGET-SUBTARGET-[TAG-]SHORT_REPO-BRANCH.config"
+            echo "  Known repos: $REPO_NAMES"
+            exit 1
+          fi
+
+          BRANCH="${STEM#*-${MATCHED_REPO}-}"
+
+          # SHORT_REPO → 完整 owner/repo 映射
+          case "$MATCHED_REPO" in
+            "VIKINGYFY")       SOURCE_OWNER="VIKINGYFY/immortalwrt" ;;
+            "coolsnowwolf")    SOURCE_OWNER="coolsnowwolf/lede" ;;
+            "immortalwrt")     SOURCE_OWNER="immortalwrt/immortalwrt" ;;
+            "openwrt")         SOURCE_OWNER="openwrt/openwrt" ;;
+            "LiBwrt")          SOURCE_OWNER="LiBwrt/LibWrt" ;;
+            "JuliusBairaktaris") SOURCE_OWNER="JuliusBairaktaris/openwrt-ppe-nss" ;;
+            *)                 SOURCE_OWNER="${MATCHED_REPO}/openwrt" ;;
+          esac
+
+          echo "REPO_URL=https://github.com/${SOURCE_OWNER}" >> "$GITHUB_ENV"
+          echo "REPO_BRANCH=${BRANCH}" >> "$GITHUB_ENV"
+          echo "SOURCE_LABEL=${SOURCE_OWNER}" >> "$GITHUB_ENV"
+          echo "SOURCE_BRANCH=${BRANCH}" >> "$GITHUB_ENV"
+
+          echo "=========================================="
+          echo "  Resolved from filename: ${CONFIG_FILE}"
+          echo "  Repo   : ${SOURCE_OWNER}"
+          echo "  Branch : ${BRANCH}"
+          echo "=========================================="
+
       - name: Show Task Info
         run: |
           echo "=========================================="
@@ -679,6 +659,36 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      - name: Delete Old Releases (same config)
+        if: env.DO_RELEASE == 'true' && success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PREFIX="firmware/${CONFIG_FILE}-"
+          echo "Cleaning up old releases matching tag prefix: ${PREFIX}"
+
+          OLD_TAGS=$(curl -sH "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" | \
+            jq -r --arg p "$PREFIX" '.[] | select(.tag_name | startswith($p)) | .tag_name')
+
+          if [ -z "$OLD_TAGS" ]; then
+            echo "No old releases found."
+            exit 0
+          fi
+
+          echo "Found old releases:"
+          echo "$OLD_TAGS"
+
+          for tag in $OLD_TAGS; do
+            echo "  → Deleting: $tag"
+            gh release delete "$tag" -y 2>&1 || echo "    WARNING: failed to delete $tag"
+          done
+
+      - name: Prepare Release Meta
+        if: env.DO_RELEASE == 'true' && success()
+        run: |
+          echo "RELEASE_DATE=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')" >> "$GITHUB_ENV"
+
       - name: Create Release
         if: env.DO_RELEASE == 'true' && success()
         uses: softprops/action-gh-release@v2
@@ -692,8 +702,8 @@ jobs:
             **Branch**: `${{ env.REPO_BRANCH }}`
             **Kernel**: `${{ steps.organize.outputs.KVER || 'unknown' }}`
             **Run**: #${{ github.run_number }}
-            **Commit**: ${{ github.sha }}
-            **Date**: $(date '+%Y-%m-%d %H:%M')
+            **Commit**: ${{ steps.clone.outputs.WRT_HASH }}
+            **Date**: ${{ env.RELEASE_DATE }}
           draft: false
           prerelease: false
         env:

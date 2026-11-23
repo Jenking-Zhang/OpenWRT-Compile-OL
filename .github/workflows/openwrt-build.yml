@@ -117,7 +117,6 @@ jobs:
           DROPDOWN="${{ github.event.inputs.config_files }}"
           EXTRA="${{ github.event.inputs.config_extra }}"
 
-          # config_extra 优先（自定义 > 下拉）
           if [ -n "$EXTRA" ]; then
             CONFIG_INPUT="$EXTRA"
           else
@@ -165,17 +164,12 @@ jobs:
       - name: Resolve Source From Filename
         id: resolve
         run: |
-          # 文件名格式 (强制): TARGET_SUBTARGET[_TAG]_SHORT_REPO_BRANCH.config
-          # 全下划线分隔, REPO/BRANCH 在最后两位, TAG 可选 (可含 hyphen)
-          # 例: qualcommbe_ipq53xx_JDC-BE6500_VIKINGYFY_owrt.config
           STEM="${CONFIG_FILE%.config}"
 
           REPO_NAMES="VIKINGYFY JuliusBairaktaris coolsnowwolf immortalwrt openwrt LiBwrt"
 
-          # BRANCH = 最后一段 (最后一个 _ 之后)
           BRANCH="${STEM##*_}"
 
-          # 找 REPO: 后缀必须是 "_${repo}_${BRANCH}"
           MATCHED_REPO=""
           for repo in $REPO_NAMES; do
             if [[ "$STEM" == *"_${repo}_${BRANCH}" ]]; then
@@ -286,8 +280,6 @@ jobs:
             done
             sudo apt-get autoremove -y 2>/dev/null || true
             sudo apt-get clean
-          else
-            echo "已跳过预装环境清理"
           fi
 
           sudo apt-get update -y -qq
@@ -305,7 +297,7 @@ jobs:
           AFTER_ROOT=$(df -k / | tail -1 | awk '{print $3}')
           FREED=$(( (BEFORE_ROOT - AFTER_ROOT) / 1024 ))
           TOTAL=$(( $(date +%s) - START ))
-          echo "--- DONE: 释放 ${FREED}MB ($(( FREED/1024 ))GB), 耗时 ${TOTAL}s ---"
+          echo "释放 ${FREED}MB ($(( FREED/1024 ))GB), 耗时 ${TOTAL}s "
           df -h /
 
       - name: Clone OpenWrt Source
@@ -455,29 +447,21 @@ jobs:
       # - name: Update OpenClash LuCI
       #   working-directory: ./openwrt
       #   run: |
-      #     # 1. 彻底清理旧路径，防止 feeds 里的旧版本残留
       #     rm -rf ./package/luci-app-openclash
       #     rm -rf ./package/feeds/luci/luci-app-openclash
       #     rm -rf ./package/lean/luci-app-openclash
       #     rm -rf ./feeds/luci/applications/luci-app-openclash
 
-      #     # 2. 拉取整个仓库到临时目录
-      #     # 使用 --depth=1 依然是推荐的，因为你只需要最新的源码
       #     git clone --depth=1 https://github.com/vernesong/OpenClash.git /tmp/openclash_source
 
-      #     # 3. 将嵌套的插件目录移动到编译系统的 package 目录
-      #     # 这样直接解决了你说的“目录嵌套”问题
       #     cp -r /tmp/openclash_source/luci-app-openclash ./package/luci-app-openclash
 
-      #     # 4. 清理临时拉取的源码
       #     rm -rf /tmp/openclash_source
 
-      #     # 5. 打印版本号确认，方便在 Action 日志里对账
       #     echo "=============================="
       #     grep "PKG_VERSION:=" ./package/luci-app-openclash/Makefile || echo "Version info not found"
       #     echo "=============================="
 
-      #     # 6. 强制刷新，让 OpenWrt 识别到这个“手动放入”的新包
       #     ./scripts/feeds install -a -f
 
       # - name: Get Latest OpenVPN Version
@@ -609,8 +593,6 @@ jobs:
         if: success() && github.event.inputs.enable_ccache != 'false'
         working-directory: ./openwrt
         run: |
-          # 缓存里的 stamp 是昨天的时间戳，而 git clone 的源码 mtime 是刚刚
-          # OpenWrt 按时间戳判断依赖，会让 Compile 阶段重编 tools/toolchain
           echo "Touching restored stamps..."
           find ./staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | \
               while read -r d; do find "$d" -type f -exec touch {} +; done
@@ -748,7 +730,6 @@ jobs:
           JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-dl&per_page=100")
 
-          # 新版确认存在后才清理旧版，避免上传失败/列表滞后导致误删
           if ! echo "$JSON" | jq -e --arg k "$KEEP" 'any(.actions_caches[]; .key == $k)' > /dev/null; then
             echo "New cache '${KEEP}' not visible yet, skip prune."
             exit 0
@@ -766,9 +747,11 @@ jobs:
               done
           echo "DL prune done"
 
-      - name: Show DL Size
+      - name: Show DL Info
         working-directory: ./openwrt
-        run: du -sh dl/
+        run: |
+          du -sh dl/
+          ls -la dl/
 
       - name: Report Cache Versions
         continue-on-error: true

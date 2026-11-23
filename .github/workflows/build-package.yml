@@ -104,30 +104,6 @@ jobs:
           echo "WRT_HASH=$(git -C openwrt rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "Cloned ${SOURCE_OWNER} @ ${SOURCE_BRANCH}"
 
-      - name: Find Latest DL Cache Key
-        id: find-dl
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # 与 openwrt-build.yml 完全一致: 取 created_at 最新的一条 wrt-dl-<UTC时间戳>
-          JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-dl&per_page=100")
-          echo "=== DL cache stored versions (before restore) ==="
-          echo "$JSON" | jq -r '.actions_caches | sort_by(.created_at) | .[]
-            | "  \(.key)  \(.size_in_bytes/1048576|floor)MB  created=\(.created_at)"'
-          KEY=$(echo "$JSON" | jq -r '[.actions_caches[] | select(.key | startswith("wrt-dl"))] | sort_by(.created_at) | reverse | .[0].key // empty')
-          [ -z "$KEY" ] && KEY="wrt-dl"
-          echo "Restore DL cache key: ${KEY}"
-          echo "dl_key=${KEY}" >> "$GITHUB_OUTPUT"
-
-      - name: DL Restore
-        continue-on-error: true
-        uses: actions/cache/restore@main
-        with:
-          key: ${{ steps.find-dl.outputs.dl_key }}
-          path: openwrt/dl
-
       - name: Feeds Update & Install
         working-directory: ./openwrt
         run: |
@@ -150,6 +126,71 @@ jobs:
           fi
           cd openwrt && make defconfig
 
+      - name: 获取缓存最新版本
+        id: cache-keys
+        continue-on-error: true
+        working-directory: ./openwrt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TS=$(date -u +%Y%m%d-%H%M%S)
+
+          TARGET=$(grep -m1 -oP '^CONFIG_TARGET_\K[^=_]+(?==y)' .config 2>/dev/null || echo "x86")
+          SUBTARGET=$(grep -m1 -oP "^CONFIG_TARGET_${TARGET}_\K[^=_]+(?==y)" .config 2>/dev/null || echo "64")
+          TOOLS_HASH=$(git archive HEAD tools 2>/dev/null | sha256sum | cut -c1-7 || echo "unknown")
+          TC_HASH=$(git archive HEAD tools toolchain 2>/dev/null | sha256sum | cut -c1-7 || echo "unknown")
+
+          TOOLS_PREFIX="wrt-tools-${TOOLS_HASH}"
+          TC_PREFIX="wrt-toolchain-${TARGET}-${SUBTARGET}-${TC_HASH}"
+          TOOLS_SAVE_KEY="${TOOLS_PREFIX}-${TS}"
+          TC_SAVE_KEY="${TC_PREFIX}-${TS}"
+
+          api() {
+            curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=$1&per_page=100"
+          }
+          latest() {
+            echo "$1" | jq -r --arg p "$2" '[.actions_caches[] | select(.key | startswith($p))] | sort_by(.created_at) | reverse | .[0].key // empty'
+          }
+          inventory() {
+            echo "--- $1 ---"
+            echo "$2" | jq -r '.actions_caches | sort_by(.created_at) | .[] | "  \(.key)  \(.size_in_bytes/1048576|floor)MB  created=\(.created_at)"'
+          }
+
+          DJ=$(api "wrt-dl")
+          TJ=$(api "wrt-tools-")
+          CJ=$(api "wrt-toolchain-")
+          inventory "DL 现有版本" "$DJ"
+          inventory "Tools 现有版本" "$TJ"
+          inventory "Toolchain 现有版本" "$CJ"
+
+          DL_RESTORE_KEY=$(latest "$DJ" "wrt-dl");    [ -z "$DL_RESTORE_KEY" ] && DL_RESTORE_KEY="wrt-dl"
+          TOOLS_RESTORE_KEY=$(latest "$TJ" "${TOOLS_PREFIX}-"); [ -z "$TOOLS_RESTORE_KEY" ] && TOOLS_RESTORE_KEY="${TOOLS_PREFIX}"
+          TC_RESTORE_KEY=$(latest "$CJ" "${TC_PREFIX}-");       [ -z "$TC_RESTORE_KEY" ] && TC_RESTORE_KEY="${TC_PREFIX}"
+
+          echo "=== 本次使用的 key（DL 只恢复不保存） ==="
+          echo "  DL        restore=${DL_RESTORE_KEY}"
+          echo "  Tools     restore=${TOOLS_RESTORE_KEY}  save=${TOOLS_SAVE_KEY}"
+          echo "  Toolchain restore=${TC_RESTORE_KEY}  save=${TC_SAVE_KEY}"
+
+          for kv in \
+            "dl_restore_key=${DL_RESTORE_KEY}" \
+            "tools_prefix=${TOOLS_PREFIX}" \
+            "tc_prefix=${TC_PREFIX}" \
+            "tools_restore_key=${TOOLS_RESTORE_KEY}" \
+            "tc_restore_key=${TC_RESTORE_KEY}" \
+            "tools_save_key=${TOOLS_SAVE_KEY}" \
+            "tc_save_key=${TC_SAVE_KEY}"; do
+            echo "$kv" >> "$GITHUB_OUTPUT"
+          done
+
+      - name: 恢复 DL Cache
+        continue-on-error: true
+        uses: actions/cache/restore@main
+        with:
+          key: ${{ steps.cache-keys.outputs.dl_restore_key }}
+          path: openwrt/dl
+
       - name: Pre-download Package Sources
         working-directory: ./openwrt
         run: |
@@ -170,63 +211,22 @@ jobs:
           done
           du -sh dl/ 2>/dev/null || true
 
-      - name: Compute Cache Keys
-        id: compute-cache-keys
-        working-directory: ./openwrt
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          TARGET=$(grep -m1 -oP '^CONFIG_TARGET_\K[^=_]+(?==y)' .config 2>/dev/null || echo "x86")
-          SUBTARGET=$(grep -m1 -oP "^CONFIG_TARGET_${TARGET}_\K[^=_]+(?==y)" .config 2>/dev/null || echo "64")
-          TOOLS_HASH=$(git archive HEAD tools 2>/dev/null | sha256sum | cut -c1-7 || echo "unknown")
-          TC_HASH=$(git archive HEAD tools toolchain 2>/dev/null | sha256sum | cut -c1-7 || echo "unknown")
-          TS=$(date -u +%Y%m%d-%H%M%S)
-
-          TOOLS_PREFIX="wrt-tools-${TOOLS_HASH}"
-          TC_PREFIX="wrt-toolchain-${TARGET}-${SUBTARGET}-${TC_HASH}"
-          TOOLS_SAVE_KEY="${TOOLS_PREFIX}-${TS}"
-          TC_SAVE_KEY="${TC_PREFIX}-${TS}"
-
-          TJ=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-tools-&per_page=100")
-          CJ=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-toolchain-&per_page=100")
-          TOOLS_RESTORE_KEY=$(echo "$TJ" | jq -r --arg p "${TOOLS_PREFIX}-" '[.actions_caches[] | select(.key | startswith($p))] | sort_by(.created_at) | reverse | .[0].key // empty')
-          TC_RESTORE_KEY=$(echo "$CJ" | jq -r --arg p "${TC_PREFIX}-" '[.actions_caches[] | select(.key | startswith($p))] | sort_by(.created_at) | reverse | .[0].key // empty')
-          [ -z "$TOOLS_RESTORE_KEY" ] && TOOLS_RESTORE_KEY="${TOOLS_PREFIX}"
-          [ -z "$TC_RESTORE_KEY" ] && TC_RESTORE_KEY="${TC_PREFIX}"
-
-          echo "=== Tools / Toolchain cache ==="
-          echo "  tools     prefix : ${TOOLS_PREFIX}"
-          echo "  tools     restore: ${TOOLS_RESTORE_KEY}"
-          echo "  tools     save   : ${TOOLS_SAVE_KEY}"
-          echo "  toolchain prefix : ${TC_PREFIX}"
-          echo "  toolchain restore: ${TC_RESTORE_KEY}"
-          echo "  toolchain save   : ${TC_SAVE_KEY}"
-
-          echo "tools_prefix=${TOOLS_PREFIX}" >> "$GITHUB_OUTPUT"
-          echo "tc_prefix=${TC_PREFIX}" >> "$GITHUB_OUTPUT"
-          echo "tools_restore_key=${TOOLS_RESTORE_KEY}" >> "$GITHUB_OUTPUT"
-          echo "tc_restore_key=${TC_RESTORE_KEY}" >> "$GITHUB_OUTPUT"
-          echo "tools_save_key=${TOOLS_SAVE_KEY}" >> "$GITHUB_OUTPUT"
-          echo "tc_save_key=${TC_SAVE_KEY}" >> "$GITHUB_OUTPUT"
-
-      - name: Tools Cache Restore
+      - name: 恢复 Tools Cache
         id: tools-restore
         continue-on-error: true
         if: github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/restore@main
         with:
-          key: ${{ steps.compute-cache-keys.outputs.tools_restore_key }}
+          key: ${{ steps.cache-keys.outputs.tools_restore_key }}
           path: openwrt/staging_dir/host*
 
-      - name: Toolchain Cache Restore
+      - name: 恢复 Toolchain Cache
         id: tc-restore
         continue-on-error: true
         if: github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/restore@main
         with:
-          key: ${{ steps.compute-cache-keys.outputs.tc_restore_key }}
+          key: ${{ steps.cache-keys.outputs.tc_restore_key }}
           path: |
             openwrt/.ccache
             openwrt/staging_dir/tool*
@@ -243,13 +243,43 @@ jobs:
           make tools/install || make -C tools install
           du -sh staging_dir/host* 2>/dev/null || true
 
-      - name: 保存 Tools Cache
+      - name: 上传 Tools Cache
         continue-on-error: true
         if: success() && github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/save@main
         with:
-          key: ${{ steps.compute-cache-keys.outputs.tools_save_key }}
+          key: ${{ steps.cache-keys.outputs.tools_save_key }}
           path: openwrt/staging_dir/host*
+
+      - name: 清理 Tools Cache
+        continue-on-error: true
+        if: success() && github.event.inputs.enable_ccache != 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CUTOFF=$(date -d '30 days ago' +%s)
+          P="${{ steps.cache-keys.outputs.tools_prefix }}"
+          echo "--- ${P}: 同前缀保留最新一版，其他前缀超过 30 天的删除 ---"
+          JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-tools-&per_page=100")
+          echo "$JSON" | jq -r --arg p "${P}-" --argjson cutoff "$CUTOFF" '
+            .actions_caches as $all
+            | ($all | map(select(.key | startswith($p))) | sort_by(.created_at) | reverse) as $same
+            | ($same[0].key // "") as $keep
+            | $all[]
+            | select(
+                ((.key | startswith($p)) and (.key != $keep))
+                or
+                ((.key | startswith($p) | not) and ((.created_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) < $cutoff))
+              )
+            | "\(.id)\t\(.key)\t\(.created_at)"' \
+            | while IFS=$'\t' read -r ID KEY CREATED; do
+                [ -z "$ID" ] && continue
+                echo "  DEL ${KEY} (${CREATED})"
+                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
+              done
+          echo "Tools prune done"
 
       - name: 处理 Toolchain Cache
         if: success() && (github.event.inputs.enable_ccache == 'false' || steps.tc-restore.outputs.cache-hit != 'true')
@@ -263,53 +293,45 @@ jobs:
           make toolchain/install || make -C toolchain install
           du -sh staging_dir/tool* 2>/dev/null || true
 
-      - name: 保存 Toolchain Cache
+      - name: 上传 Toolchain Cache
         continue-on-error: true
         if: success() && github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/save@main
         with:
-          key: ${{ steps.compute-cache-keys.outputs.tc_save_key }}
+          key: ${{ steps.cache-keys.outputs.tc_save_key }}
           path: |
             openwrt/.ccache
             openwrt/staging_dir/tool*
 
-      - name: 清理 Tools/Toolchain Cache
+      - name: 清理 Toolchain Cache
         continue-on-error: true
         if: success() && github.event.inputs.enable_ccache != 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           CUTOFF=$(date -d '30 days ago' +%s)
-          echo "Cutoff (30 days ago): ${CUTOFF}"
-
-          prune() {
-            LOCAL_PREFIX="$1"
-            API_PREFIX="$2"
-            echo "--- ${LOCAL_PREFIX}: 同前缀保留最新一版，其他前缀超过 30 天的删除 ---"
-            JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=${API_PREFIX}&per_page=100")
-            echo "$JSON" | jq -r --arg p "${LOCAL_PREFIX}-" --argjson cutoff "$CUTOFF" '
-              .actions_caches as $all
-              | ($all | map(select(.key | startswith($p))) | sort_by(.created_at) | reverse) as $same
-              | ($same[0].key // "") as $keep
-              | $all[]
-              | select(
-                  ((.key | startswith($p)) and (.key != $keep))
-                  or
-                  ((.key | startswith($p) | not) and ((.created_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) < $cutoff))
-                )
-              | "\(.id)\t\(.key)\t\(.created_at)"' \
-              | while IFS=$'\t' read -r ID KEY CREATED; do
-                  [ -z "$ID" ] && continue
-                  echo "  DEL ${KEY} (${CREATED})"
-                  curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
-                    "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
-                done
-          }
-
-          prune "${{ steps.compute-cache-keys.outputs.tools_prefix }}" "wrt-tools-"
-          prune "${{ steps.compute-cache-keys.outputs.tc_prefix }}" "wrt-toolchain-"
-          echo "cache prune done"
+          P="${{ steps.cache-keys.outputs.tc_prefix }}"
+          echo "--- ${P}: 同前缀保留最新一版，其他前缀超过 30 天的删除 ---"
+          JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-toolchain-&per_page=100")
+          echo "$JSON" | jq -r --arg p "${P}-" --argjson cutoff "$CUTOFF" '
+            .actions_caches as $all
+            | ($all | map(select(.key | startswith($p))) | sort_by(.created_at) | reverse) as $same
+            | ($same[0].key // "") as $keep
+            | $all[]
+            | select(
+                ((.key | startswith($p)) and (.key != $keep))
+                or
+                ((.key | startswith($p) | not) and ((.created_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) < $cutoff))
+              )
+            | "\(.id)\t\(.key)\t\(.created_at)"' \
+            | while IFS=$'\t' read -r ID KEY CREATED; do
+                [ -z "$ID" ] && continue
+                echo "  DEL ${KEY} (${CREATED})"
+                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
+              done
+          echo "Toolchain prune done"
 
       # DL cache: RESTORE 但不 SAVE (按需重新下载更新的包, tools/toolchain 才是关键)
       - name: Show DL Size

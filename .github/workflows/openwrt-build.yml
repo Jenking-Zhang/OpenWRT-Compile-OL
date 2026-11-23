@@ -318,7 +318,7 @@ jobs:
           echo "Source: ${REPO_URL} (${REPO_BRANCH})"
           echo "Hash: $(git rev-parse --short HEAD)"
 
-      - name: 获取缓存最新版本
+      - name: Resolve Cache Keys
         id: cache-keys
         continue-on-error: true
         working-directory: ./openwrt
@@ -378,7 +378,7 @@ jobs:
             echo "$kv" >> "$GITHUB_OUTPUT"
           done
 
-      - name: 恢复 DL Cache
+      - name: Restore DL Cache
         continue-on-error: true
         uses: actions/cache/restore@main
         with:
@@ -584,51 +584,7 @@ jobs:
           echo "退出执行: pkill -f sshx"
           curl -sSf https://sshx.io/get | sh -s run
 
-      - name: 处理 DL Cache
-        working-directory: ./openwrt
-        run: |
-          make download -j16
-
-      - name: 上传 DL Cache
-        continue-on-error: true
-        if: success()
-        uses: actions/cache/save@main
-        with:
-          key: ${{ steps.cache-keys.outputs.dl_save_key }}
-          path: openwrt/dl
-
-      - name: 清理 DL Cache
-        continue-on-error: true
-        if: success()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          KEEP="${{ steps.cache-keys.outputs.dl_save_key }}"
-          JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-dl&per_page=100")
-
-          # 新版确认存在后才清理旧版，避免上传失败/列表滞后导致误删
-          if ! echo "$JSON" | jq -e --arg k "$KEEP" 'any(.actions_caches[]; .key == $k)' > /dev/null; then
-            echo "New cache '${KEEP}' not visible yet, skip prune."
-            exit 0
-          fi
-
-          echo "Keep: ${KEEP}"
-          echo "$JSON" | jq -r --arg keep "$KEEP" \
-            '.actions_caches[] | select(.key | startswith("wrt-dl")) | select(.key != $keep) | "\(.id)\t\(.key)\t\(.created_at)"' \
-            | while IFS=$'\t' read -r ID KEY CREATED; do
-                [ -z "$ID" ] && continue
-                echo "  DEL ${KEY} (${CREATED})"
-                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
-                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
-              done
-          echo "DL prune done"
-
-      - name: Show DL Size
-        working-directory: ./openwrt
-        run: du -sh dl/
-
-      - name: 恢复 Tools Cache
+      - name: Restore Tools Cache
         id: tools-restore
         continue-on-error: true
         if: github.event.inputs.enable_ccache != 'false'
@@ -637,7 +593,7 @@ jobs:
           key: ${{ steps.cache-keys.outputs.tools_restore_key }}
           path: openwrt/staging_dir/host*
 
-      - name: 恢复 Toolchain Cache
+      - name: Restore Toolchain Cache
         id: tc-restore
         continue-on-error: true
         if: github.event.inputs.enable_ccache != 'false'
@@ -648,8 +604,8 @@ jobs:
             openwrt/.ccache
             openwrt/staging_dir/tool*
 
-      - name: 处理 Tools Cache
-        if: success() && (github.event.inputs.enable_ccache == 'false' || steps.tools-restore.outputs.cache-hit != 'true')
+      - name: Build Tools
+        if: success() && steps.tools-restore.outputs.cache-hit != 'true'
         working-directory: ./openwrt
         run: |
           echo "Tools cache hit='${{ steps.tools-restore.outputs.cache-hit }}' (empty = 缓存关闭或未命中) -> 编译 tools"
@@ -660,7 +616,7 @@ jobs:
           make tools/install || make -C tools install
           du -sh staging_dir/host* 2>/dev/null || true
 
-      - name: 上传 Tools Cache
+      - name: Save Tools Cache
         continue-on-error: true
         if: success() && github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/save@main
@@ -668,7 +624,7 @@ jobs:
           key: ${{ steps.cache-keys.outputs.tools_save_key }}
           path: openwrt/staging_dir/host*
 
-      - name: 清理 Tools Cache
+      - name: Prune Tools Cache
         continue-on-error: true
         if: success() && github.event.inputs.enable_ccache != 'false'
         env:
@@ -698,8 +654,8 @@ jobs:
               done
           echo "Tools prune done"
 
-      - name: 处理 Toolchain Cache
-        if: success() && (github.event.inputs.enable_ccache == 'false' || steps.tc-restore.outputs.cache-hit != 'true')
+      - name: Build Toolchain
+        if: success() && steps.tc-restore.outputs.cache-hit != 'true'
         working-directory: ./openwrt
         run: |
           echo "Toolchain cache hit='${{ steps.tc-restore.outputs.cache-hit }}' (empty = 缓存关闭或未命中) -> 编译 toolchain"
@@ -710,7 +666,7 @@ jobs:
           make toolchain/install || make -C toolchain install
           du -sh staging_dir/tool* 2>/dev/null || true
 
-      - name: 上传 Toolchain Cache
+      - name: Save Toolchain Cache
         continue-on-error: true
         if: success() && github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/save@main
@@ -720,7 +676,7 @@ jobs:
             openwrt/.ccache
             openwrt/staging_dir/tool*
 
-      - name: 清理 Toolchain Cache
+      - name: Prune Toolchain Cache
         continue-on-error: true
         if: success() && github.event.inputs.enable_ccache != 'false'
         env:
@@ -749,6 +705,50 @@ jobs:
                   "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
               done
           echo "Toolchain prune done"
+
+      - name: Update DL Cache
+        working-directory: ./openwrt
+        run: |
+          make download -j16
+
+      - name: Save DL Cache
+        continue-on-error: true
+        if: success()
+        uses: actions/cache/save@main
+        with:
+          key: ${{ steps.cache-keys.outputs.dl_save_key }}
+          path: openwrt/dl
+
+      - name: Prune DL Cache
+        continue-on-error: true
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          KEEP="${{ steps.cache-keys.outputs.dl_save_key }}"
+          JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-dl&per_page=100")
+
+          # 新版确认存在后才清理旧版，避免上传失败/列表滞后导致误删
+          if ! echo "$JSON" | jq -e --arg k "$KEEP" 'any(.actions_caches[]; .key == $k)' > /dev/null; then
+            echo "New cache '${KEEP}' not visible yet, skip prune."
+            exit 0
+          fi
+
+          echo "Keep: ${KEEP}"
+          echo "$JSON" | jq -r --arg keep "$KEEP" \
+            '.actions_caches[] | select(.key | startswith("wrt-dl")) | select(.key != $keep) | "\(.id)\t\(.key)\t\(.created_at)"' \
+            | while IFS=$'\t' read -r ID KEY CREATED; do
+                [ -z "$ID" ] && continue
+                echo "  DEL ${KEY} (${CREATED})"
+                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
+              done
+          echo "DL prune done"
+
+      - name: Show DL Size
+        working-directory: ./openwrt
+        run: du -sh dl/
 
       - name: Report Cache Versions
         continue-on-error: true

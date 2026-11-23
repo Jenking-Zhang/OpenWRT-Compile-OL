@@ -126,7 +126,7 @@ jobs:
           fi
           cd openwrt && make defconfig
 
-      - name: 获取缓存最新版本
+      - name: Resolve Cache Keys
         id: cache-keys
         continue-on-error: true
         working-directory: ./openwrt
@@ -184,7 +184,7 @@ jobs:
             echo "$kv" >> "$GITHUB_OUTPUT"
           done
 
-      - name: 恢复 DL Cache
+      - name: Restore DL Cache
         continue-on-error: true
         uses: actions/cache/restore@main
         with:
@@ -211,7 +211,7 @@ jobs:
           done
           du -sh dl/ 2>/dev/null || true
 
-      - name: 恢复 Tools Cache
+      - name: Restore Tools Cache
         id: tools-restore
         continue-on-error: true
         if: github.event.inputs.enable_ccache != 'false'
@@ -220,7 +220,7 @@ jobs:
           key: ${{ steps.cache-keys.outputs.tools_restore_key }}
           path: openwrt/staging_dir/host*
 
-      - name: 恢复 Toolchain Cache
+      - name: Restore Toolchain Cache
         id: tc-restore
         continue-on-error: true
         if: github.event.inputs.enable_ccache != 'false'
@@ -231,8 +231,8 @@ jobs:
             openwrt/.ccache
             openwrt/staging_dir/tool*
 
-      - name: 处理 Tools Cache
-        if: success() && (github.event.inputs.enable_ccache == 'false' || steps.tools-restore.outputs.cache-hit != 'true')
+      - name: Build Tools
+        if: success() && steps.tools-restore.outputs.cache-hit != 'true'
         working-directory: ./openwrt
         run: |
           echo "Tools cache hit='${{ steps.tools-restore.outputs.cache-hit }}' (empty = 缓存关闭或未命中) -> 编译 tools"
@@ -243,7 +243,7 @@ jobs:
           make tools/install || make -C tools install
           du -sh staging_dir/host* 2>/dev/null || true
 
-      - name: 上传 Tools Cache
+      - name: Save Tools Cache
         continue-on-error: true
         if: success() && github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/save@main
@@ -251,7 +251,7 @@ jobs:
           key: ${{ steps.cache-keys.outputs.tools_save_key }}
           path: openwrt/staging_dir/host*
 
-      - name: 清理 Tools Cache
+      - name: Prune Tools Cache
         continue-on-error: true
         if: success() && github.event.inputs.enable_ccache != 'false'
         env:
@@ -281,8 +281,8 @@ jobs:
               done
           echo "Tools prune done"
 
-      - name: 处理 Toolchain Cache
-        if: success() && (github.event.inputs.enable_ccache == 'false' || steps.tc-restore.outputs.cache-hit != 'true')
+      - name: Build Toolchain
+        if: success() && steps.tc-restore.outputs.cache-hit != 'true'
         working-directory: ./openwrt
         run: |
           echo "Toolchain cache hit='${{ steps.tc-restore.outputs.cache-hit }}' (empty = 缓存关闭或未命中) -> 编译 toolchain"
@@ -293,7 +293,7 @@ jobs:
           make toolchain/install || make -C toolchain install
           du -sh staging_dir/tool* 2>/dev/null || true
 
-      - name: 上传 Toolchain Cache
+      - name: Save Toolchain Cache
         continue-on-error: true
         if: success() && github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/save@main
@@ -303,7 +303,7 @@ jobs:
             openwrt/.ccache
             openwrt/staging_dir/tool*
 
-      - name: 清理 Toolchain Cache
+      - name: Prune Toolchain Cache
         continue-on-error: true
         if: success() && github.event.inputs.enable_ccache != 'false'
         env:

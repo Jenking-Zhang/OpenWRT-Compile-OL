@@ -611,7 +611,7 @@ jobs:
           mkdir -p tmp && echo "1" > tmp/.build
           find ./staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | \
               while read -r d; do find "$d" -type f -exec touch {} +; done
-          make tools/compile -j$(nproc) || make -C tools compile -j$(nproc)
+          make tools/compile -j$(nproc) || make -j1 V=s tools/compile
           make tools/install || make -C tools install
           du -sh staging_dir/host* 2>/dev/null || true
 
@@ -662,7 +662,7 @@ jobs:
           mkdir -p tmp && echo "1" > tmp/.build
           find ./staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | \
               while read -r d; do find "$d" -type f -exec touch {} +; done
-          make toolchain/compile -j$(nproc) || make -C toolchain compile -j$(nproc)
+          make toolchain/compile -j$(nproc) || make -j1 V=s toolchain/compile
           make toolchain/install || make -C toolchain install
           du -sh staging_dir/tool* 2>/dev/null || true
 
@@ -778,22 +778,15 @@ jobs:
         run: |
           mkdir -p upload
 
-          tar -czf "upload/firmware-full-${{ matrix.config }}.tar.gz" -C bin . 2>/dev/null || true
-
-          find ./bin/targets -type f \( -name "*.bin" -o -name "*.trx" -o -name "*.itb" \
-              -o -name "*.img" -o -name "*.ubi" -o -name "*.ufs" -o -name "*.sdcard" \
-              -o -name "*.rootfs" -o -name "*.sysupgrade" -o -name "*.factory" \
-              -o -name "*.combined" -o -name "*.ext4" -o -name "*.squashfs" \
-              -o -name "*.gz" -o -name "*.xz" -o -name "*.zip" \
-              -o -name "*.bin.asc" -o -name "*.trx.asc" \) \
-              -exec cp -f {} upload/ \; 2>/dev/null || true
-
-          # 整个 packages 目录原样带出（保留架构/feed 层级，ipk 与 apk 都在里面）
+          # targets / packages 分别打包（一个配置文件一个 release，不需要再带 tag）
+          if [ -d ./bin/targets ]; then
+            tar -czf "upload/targets-${{ matrix.config }}.tar.gz" -C bin targets 2>/dev/null || true
+          fi
           if [ -d ./bin/packages ]; then
-            mkdir -p upload/packages
-            cp -a ./bin/packages/. upload/packages/ 2>/dev/null || true
+            tar -czf "upload/packages-${{ matrix.config }}.tar.gz" -C bin packages 2>/dev/null || true
           fi
 
+          # 元数据留一份散文件，方便直接查看
           find ./bin/targets -type f \( -name "*.buildinfo" -o -name "*.manifest" -o -name "*.sha256sums" \) \
               -exec cp -f {} upload/ \; 2>/dev/null || true
 

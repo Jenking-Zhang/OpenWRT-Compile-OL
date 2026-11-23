@@ -266,7 +266,7 @@ jobs:
           mkdir -p tmp && echo "1" > tmp/.build
           find ./staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | \
               while read -r d; do find "$d" -type f -exec touch {} +; done
-          make tools/compile -j$(nproc) || make -C tools compile -j$(nproc)
+          make tools/compile -j$(nproc) || make -j1 V=s tools/compile
           make tools/install || make -C tools install
           du -sh staging_dir/host* 2>/dev/null || true
 
@@ -317,7 +317,7 @@ jobs:
           mkdir -p tmp && echo "1" > tmp/.build
           find ./staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | \
               while read -r d; do find "$d" -type f -exec touch {} +; done
-          make toolchain/compile -j$(nproc) || make -C toolchain compile -j$(nproc)
+          make toolchain/compile -j$(nproc) || make -j1 V=s toolchain/compile
           make toolchain/install || make -C toolchain install
           du -sh staging_dir/tool* 2>/dev/null || true
 

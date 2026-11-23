@@ -558,6 +558,7 @@ jobs:
           echo "tc_key=${TC_KEY}" >> "$GITHUB_OUTPUT"
 
       - name: Tools Cache Restore
+        id: tools-restore
         continue-on-error: true
         if: github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/restore@main
@@ -566,6 +567,7 @@ jobs:
           path: openwrt/staging_dir/host*
 
       - name: Toolchain Cache Restore
+        id: tc-restore
         continue-on-error: true
         if: github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/restore@main
@@ -576,20 +578,48 @@ jobs:
             openwrt/staging_dir/tool*
 
       - name: Build Tools + Toolchain
-        if: github.event.inputs.enable_ccache != 'false'
         working-directory: ./openwrt
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          TOOLS_HIT="${{ steps.tools-restore.outputs.cache-hit }}"
+          TC_HIT="${{ steps.tc-restore.outputs.cache-hit }}"
+          echo "Cache hit: tools=${TOOLS_HIT:-<step skipped>}, toolchain=${TC_HIT:-<step skipped>}"
+
+          # 刷新已有 stamp (cache restore 可能带了文件)
           find ./staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | \
               while read -r d; do find "$d" -type f -exec touch {} +; done
-          mkdir -p tmp && echo "1" > tmp/.build
-          make prepare -j$(nproc)
+
+          case "${TOOLS_HIT}-${TC_HIT}" in
+            true-true)
+              echo "Both caches restored, skip build."
+              ;;
+            true-false)
+              echo "Toolchain cache missed, building toolchain only..."
+              make toolchain/compile -j$(nproc) || make -C toolchain compile -j$(nproc)
+              make toolchain/install || make -C toolchain install
+              ;;
+            false-true)
+              echo "Tools cache missed, building tools only..."
+              make tools/compile -j$(nproc) || make -C tools compile -j$(nproc)
+              make tools/install || make -C tools install
+              ;;
+            *)
+              echo "Cache disabled or missed, building everything..."
+              make prepare -j$(nproc)
+              ;;
+          esac
+
           df -h
           du -sh staging_dir/host* staging_dir/tool* 2>/dev/null
 
-          gh cache list --key "${{ steps.compute-cache-keys.outputs.tools_key }}" --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>/dev/null || true
-          gh cache list --key "${{ steps.compute-cache-keys.outputs.tc_key }}" --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>/dev/null || true
+          # 预删除 exact key (防止并发 save 冲突)
+          if [ -n "${{ steps.compute-cache-keys.outputs.tools_key }}" ]; then
+            gh cache list --key "${{ steps.compute-cache-keys.outputs.tools_key }}" --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>/dev/null || true
+          fi
+          if [ -n "${{ steps.compute-cache-keys.outputs.tc_key }}" ]; then
+            gh cache list --key "${{ steps.compute-cache-keys.outputs.tc_key }}" --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>/dev/null || true
+          fi
 
       - name: Save Tools Cache
         continue-on-error: true

@@ -1,0 +1,324 @@
+name: Build-Package
+
+permissions:
+  contents: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: '源码仓库 + 分支'
+        required: true
+        default: 'VIKINGYFY/immortalwrt -> owrt'
+        type: choice
+        options:
+          - 'VIKINGYFY/immortalwrt -> owrt'
+          - 'VIKINGYFY/immortalwrt -> main'
+          - 'coolsnowwolf/lede -> master'
+          - 'immortalwrt/immortalwrt -> master'
+          - 'immortalwrt/immortalwrt -> openwrt-25.12'
+          - 'immortalwrt/immortalwrt -> openwrt-24.10'
+          - 'openwrt/openwrt -> main'
+          - 'openwrt/openwrt -> openwrt-25.12'
+          - 'openwrt/openwrt -> openwrt-24.10'
+          - 'LiBwrt/LibWrt -> 25.12-nss'
+          - 'JuliusBairaktaris/openwrt-ppe-nss -> ppe-nss'
+
+      config_target:
+        description: '基础配置文件（myconfig/ 下的 .config），用于确定 TARGET/SUBTARGET，留空=默认 x86_64'
+        required: false
+        default: ''
+
+      packages:
+        description: '要编译的包，逗号分隔（如 luci-app-openclash,dockerd,luci-app-tailscale）'
+        required: true
+        default: ''
+
+      enable_ccache:
+        description: '启用 tools/toolchain 缓存'
+        required: true
+        default: 'true'
+        type: choice
+        options: [true, false]
+
+      do_release:
+        description: '编译后创建 Release'
+        required: true
+        default: 'false'
+        type: choice
+        options: [true, false]
+
+jobs:
+  build_package:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Init Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update -y -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential clang cmake curl git wget sed grep jq ccache \
+            device-tree-compiler gawk genisoimage libncurses5-dev \
+            libc6-dev-i386 libncursesw5-dev zlib1g-dev libssl-dev \
+            python3 python3-pyelftools rsync subversion unzip xz-utils \
+            libgmp-dev libmpc-dev libmpfr-dev libelf-dev libdw-dev \
+            libreadline-dev libtool haveged patchelf fakeroot file
+          sudo timedatectl set-timezone "Asia/Shanghai"
+
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Clone Source
+        id: clone
+        run: |
+          CHOICE="${{ github.event.inputs.source_branch }}"
+
+          if echo "$CHOICE" | grep -qE "( → | -> )"; then
+            SOURCE_OWNER=$(echo "$CHOICE" | sed -E 's/ *(→|->) *.*//' | sed 's/ *$//')
+            SOURCE_BRANCH=$(echo "$CHOICE" | sed -E 's/.*(→|->) *//' | sed 's/^ *//')
+          else
+            SOURCE_OWNER="VIKINGYFY/immortalwrt"
+            SOURCE_BRANCH="owrt"
+          fi
+
+          case "$SOURCE_OWNER" in
+            "VIKINGYFY/immortalwrt")   SOURCE_BRANCH="${SOURCE_BRANCH:-owrt}" ;;
+            "coolsnowwolf/lede")        SOURCE_BRANCH="${SOURCE_BRANCH:-master}" ;;
+            "immortalwrt/immortalwrt")  SOURCE_BRANCH="${SOURCE_BRANCH:-openwrt-25.12}" ;;
+            "openwrt/openwrt")          SOURCE_BRANCH="${SOURCE_BRANCH:-main}" ;;
+            "LiBwrt/LibWrt")            SOURCE_BRANCH="${SOURCE_BRANCH:-25.12-nss}" ;;
+            *"openwrt-ppe-nss"*)        SOURCE_BRANCH="${SOURCE_BRANCH:-ppe-nss}" ;;
+            *)                          SOURCE_BRANCH="${SOURCE_BRANCH:-main}" ;;
+          esac
+
+          SHORT_REPO=$(echo "$SOURCE_OWNER" | cut -d'/' -f1)
+          echo "SOURCE_OWNER=${SOURCE_OWNER}" >> "$GITHUB_ENV"
+          echo "SOURCE_BRANCH=${SOURCE_BRANCH}" >> "$GITHUB_ENV"
+          echo "SHORT_REPO=${SHORT_REPO}" >> "$GITHUB_ENV"
+          echo "REPO_URL=https://github.com/${SOURCE_OWNER}" >> "$GITHUB_ENV"
+          git clone --depth=1 --single-branch --branch "${SOURCE_BRANCH}" "https://github.com/${SOURCE_OWNER}" openwrt
+          echo "WRT_HASH=$(git -C openwrt rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "Cloned ${SOURCE_OWNER} @ ${SOURCE_BRANCH}"
+
+      - name: DL Restore
+        continue-on-error: true
+        uses: actions/cache/restore@main
+        with:
+          key: wrt-dl
+          path: openwrt/dl
+
+      - name: Feeds Update & Install
+        working-directory: ./openwrt
+        run: |
+          grep -q '^src-git helloworld' ./feeds.conf.default 2>/dev/null || \
+            sed -i 's/^#src-git helloworld/src-git helloworld/' ./feeds.conf.default
+          grep -q 'linkease/istore' ./feeds.conf.default 2>/dev/null || \
+            echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a -f
+
+      - name: Import Config
+        id: import-config
+        run: |
+          CFG="${{ github.event.inputs.config_target }}"
+          if [ -n "$CFG" ] && [ -f "myconfig/${CFG}" ]; then
+            echo "Using base config: myconfig/${CFG}"
+            cp -f "myconfig/${CFG}" openwrt/.config
+          else
+            echo "No base config, using default (x86_64 generic)"
+            cd openwrt
+            make defconfig
+          fi
+          cd openwrt && make defconfig
+
+      - name: Compute Cache Keys
+        id: compute-cache-keys
+        working-directory: ./openwrt
+        run: |
+          TARGET=$(grep -m1 -oP '^CONFIG_TARGET_\K[^=_]+(?==y)' .config 2>/dev/null || echo "x86")
+          SUBTARGET=$(grep -m1 -oP "^CONFIG_TARGET_${TARGET}_\K[^=_]+(?==y)" .config 2>/dev/null || echo "64")
+          TOOLS_HASH=$(git archive HEAD tools 2>/dev/null | sha256sum | cut -c1-7 || echo "unknown")
+          TC_HASH=$(git archive HEAD tools toolchain 2>/dev/null | sha256sum | cut -c1-7 || echo "unknown")
+          echo "TARGET=${TARGET} SUBTARGET=${SUBTARGET}"
+          echo "Tools key  : wrt-tools-${TOOLS_HASH}"
+          echo "Toolchain key: wrt-toolchain-${TARGET}-${SUBTARGET}-${TC_HASH}"
+          echo "tools_key=wrt-tools-${TOOLS_HASH}" >> "$GITHUB_OUTPUT"
+          echo "tc_key=wrt-toolchain-${TARGET}-${SUBTARGET}-${TC_HASH}" >> "$GITHUB_OUTPUT"
+
+      - name: Tools Cache Restore
+        id: tools-restore
+        continue-on-error: true
+        if: github.event.inputs.enable_ccache != 'false'
+        uses: actions/cache/restore@main
+        with:
+          key: ${{ steps.compute-cache-keys.outputs.tools_key }}
+          path: openwrt/staging_dir/host*
+
+      - name: Toolchain Cache Restore
+        id: tc-restore
+        continue-on-error: true
+        if: github.event.inputs.enable_ccache != 'false'
+        uses: actions/cache/restore@main
+        with:
+          key: ${{ steps.compute-cache-keys.outputs.tc_key }}
+          path: |
+            openwrt/.ccache
+            openwrt/staging_dir/tool*
+
+      - name: Build Tools + Toolchain
+        working-directory: ./openwrt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TOOLS_HIT="${{ steps.tools-restore.outputs.cache-hit }}"
+          TC_HIT="${{ steps.tc-restore.outputs.cache-hit }}"
+          echo "Cache hit: tools=${TOOLS_HIT:-<step skipped>}, toolchain=${TC_HIT:-<step skipped>}"
+
+          find ./staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | \
+              while read -r d; do find "$d" -type f -exec touch {} +; done
+
+          case "${TOOLS_HIT}-${TC_HIT}" in
+            true-true)
+              echo "Both caches restored, skip build."
+              ;;
+            true-false)
+              echo "Toolchain cache missed, building toolchain only..."
+              make toolchain/compile -j$(nproc) || make -C toolchain compile -j$(nproc)
+              make toolchain/install || make -C toolchain install
+              ;;
+            false-true)
+              echo "Tools cache missed, building tools only..."
+              make tools/compile -j$(nproc) || make -C tools compile -j$(nproc)
+              make tools/install || make -C tools install
+              ;;
+            *)
+              echo "Cache disabled or missed, building everything..."
+              make prepare -j$(nproc)
+              ;;
+          esac
+
+          du -sh staging_dir/host* staging_dir/tool* 2>/dev/null
+
+          if [ -n "${{ steps.compute-cache-keys.outputs.tools_key }}" ]; then
+            gh cache list --key "${{ steps.compute-cache-keys.outputs.tools_key }}" --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>/dev/null || true
+          fi
+          if [ -n "${{ steps.compute-cache-keys.outputs.tc_key }}" ]; then
+            gh cache list --key "${{ steps.compute-cache-keys.outputs.tc_key }}" --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>/dev/null || true
+          fi
+
+      - name: Save Tools Cache
+        continue-on-error: true
+        if: github.event.inputs.enable_ccache != 'false' && success()
+        uses: actions/cache/save@main
+        with:
+          key: ${{ steps.compute-cache-keys.outputs.tools_key }}
+          path: openwrt/staging_dir/host*
+
+      - name: Save Toolchain Cache
+        continue-on-error: true
+        if: github.event.inputs.enable_ccache != 'false' && success()
+        uses: actions/cache/save@main
+        with:
+          key: ${{ steps.compute-cache-keys.outputs.tc_key }}
+          path: |
+            openwrt/.ccache
+            openwrt/staging_dir/tool*
+
+      # DL cache: RESTORE 但不 SAVE (按需重新下载更新的包, tools/toolchain 才是关键)
+      - name: Show DL Size
+        working-directory: ./openwrt
+        run: du -sh dl/
+
+      - name: Compile Packages
+        id: compile
+        working-directory: ./openwrt
+        run: |
+          INPUT_PKGS="${{ github.event.inputs.packages }}"
+          IFS=',' read -ra PKGS <<< "$INPUT_PKGS"
+          echo "Packages to compile: ${#PKGS[@]}"
+
+          mkdir -p upload
+          FAILED=()
+
+          for PKG in "${PKGS[@]}"; do
+            PKG="${PKG// /}"
+            [ -z "$PKG" ] && continue
+            echo ""
+            echo "=========================================="
+            echo "  Compiling: $PKG"
+            echo "=========================================="
+
+            # 在 feeds/ 和 package/ 里找
+            PKG_DIR=$(find feeds/ package/ -maxdepth 5 -type d -name "$PKG" 2>/dev/null | head -1)
+            if [ -z "$PKG_DIR" ]; then
+              # 试试 Makefile 里 PKG_NAME 匹配
+              PKG_DIR=$(grep -rl "PKG_NAME:=${PKG}$" feeds/ package/ --include=Makefile 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
+            fi
+
+            if [ -z "$PKG_DIR" ]; then
+              echo "::warning::Package '$PKG' not found in feeds/ or package/, skipping."
+              FAILED+=("$PKG(not found)")
+              continue
+            fi
+
+            echo "Found at: $PKG_DIR"
+            if make -C "$PKG_DIR" compile V=s 2>&1; then
+              echo "✅ $PKG compiled OK"
+              find bin/ -name "*.ipk" -newer "$PKG_DIR/Makefile" 2>/dev/null -exec cp -f {} upload/ \; || true
+            else
+              echo "❌ $PKG FAILED"
+              FAILED+=("$PKG")
+            fi
+          done
+
+          echo ""
+          echo "=========================================="
+          echo "  Results"
+          echo "=========================================="
+          if [ ${#FAILED[@]} -gt 0 ]; then
+            echo "FAILED: ${FAILED[*]}"
+            echo "Some packages failed, continuing..."
+          fi
+          echo "Collected .ipk files:"
+          ls -lh upload/*.ipk 2>/dev/null || echo "  (none)"
+
+          echo "fail_count=${#FAILED[@]}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Package Artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: packages-${{ github.run_number }}
+          path: openwrt/upload/*.ipk
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Prepare Release Meta
+        if: github.event.inputs.do_release == 'true' && success()
+        run: |
+          echo "RELEASE_DATE=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')" >> "$GITHUB_ENV"
+          INPUT_PKGS="${{ github.event.inputs.packages }}"
+          echo "PKG_LIST=${INPUT_PKGS}" >> "$GITHUB_ENV"
+
+      - name: Create Release
+        if: github.event.inputs.do_release == 'true' && success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: package/${{ github.run_number }}
+          name: 'Packages: ${{ env.PKG_LIST }} | ${{ env.SOURCE_OWNER }} | Run #${{ github.run_number }}'
+          files: openwrt/upload/*.ipk
+          body: |
+            **Packages**: `${{ env.PKG_LIST }}`
+            **Source**: `${{ env.REPO_URL }}`
+            **Branch**: `${{ env.SOURCE_BRANCH }}`
+            **Run**: #${{ github.run_number }}
+            **Commit**: ${{ steps.clone.outputs.WRT_HASH }}
+            **Date**: ${{ env.RELEASE_DATE }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

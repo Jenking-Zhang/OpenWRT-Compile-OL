@@ -54,7 +54,10 @@ jobs:
 
           sudo -E timedatectl set-timezone "Asia/Shanghai"
 
-      - uses: actions/checkout@main
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Clone Source
         id: clone
@@ -97,13 +100,14 @@ jobs:
       - name: Feeds Update & Install
         working-directory: ./openwrt
         run: |
-          if grep -q '^#src-git helloworld' ./feeds.conf.default; then
-            sed -i 's/^#src-git helloworld/src-git helloworld/' ./feeds.conf.default
-          fi
-          grep -q 'linkease/istore' ./feeds.conf.default 2>/dev/null || \
+          sed -i 's/^#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
+
+          if ! grep -q "linkease/istore" ./feeds.conf.default 2>/dev/null; then
             echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
+          fi
+
           ./scripts/feeds update -a
-          ./scripts/feeds install -a -f
+          ./scripts/feeds install -a
 
       - name: Import Existing Config
         id: import-config

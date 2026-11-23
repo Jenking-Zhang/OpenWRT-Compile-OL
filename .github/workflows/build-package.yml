@@ -108,12 +108,14 @@ jobs:
       - name: Feeds Update & Install
         working-directory: ./openwrt
         run: |
-          grep -q '^src-git helloworld' ./feeds.conf.default 2>/dev/null || \
-            sed -i 's/^#src-git helloworld/src-git helloworld/' ./feeds.conf.default
-          grep -q 'linkease/istore' ./feeds.conf.default 2>/dev/null || \
+          sed -i 's/^#src-git helloworld/src-git helloworld/g' ./feeds.conf.default
+
+          if ! grep -q "linkease/istore" ./feeds.conf.default 2>/dev/null; then
             echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
+          fi
+
           ./scripts/feeds update -a
-          ./scripts/feeds install -a -f
+          ./scripts/feeds install -a
 
       - name: Import Config
         id: import-config
@@ -191,26 +193,6 @@ jobs:
         with:
           key: ${{ steps.cache-keys.outputs.dl_restore_key }}
           path: openwrt/dl
-
-      - name: Pre-download Package Sources
-        working-directory: ./openwrt
-        run: |
-          INPUT_PKGS="${{ github.event.inputs.packages }}"
-          IFS=',' read -ra PKGS <<< "$INPUT_PKGS"
-          for PKG in "${PKGS[@]}"; do
-            PKG="${PKG// /}"
-            [ -z "$PKG" ] && continue
-            # feeds install -a 会把包软链到 package/feeds/<feed>/<pkg>
-            TARGET=$(find package/feeds -maxdepth 2 -type d -name "$PKG" 2>/dev/null | head -1)
-            [ -z "$TARGET" ] && TARGET=$(find package -maxdepth 2 -type d -name "$PKG" -not -path "package/feeds/*" 2>/dev/null | head -1)
-            if [ -z "$TARGET" ]; then
-              echo "skip download: '$PKG' not found"
-              continue
-            fi
-            echo "Downloading sources for $PKG ($TARGET) ..."
-            make "$TARGET/download" V=s 2>&1 | tail -5 || echo "WARN: download failed for $PKG, will retry at compile"
-          done
-          du -sh dl/ 2>/dev/null || true
 
       - name: Restore Tools Cache
         id: tools-restore
@@ -349,10 +331,40 @@ jobs:
               done
           echo "Toolchain prune done"
 
-      # DL cache: RESTORE 但不 SAVE (按需重新下载更新的包, tools/toolchain 才是关键)
+      - name: Pre-download Package Sources
+        working-directory: ./openwrt
+        run: |
+          INPUT_PKGS="${{ github.event.inputs.packages }}"
+          IFS=',' read -ra PKGS <<< "$INPUT_PKGS"
+          for PKG in "${PKGS[@]}"; do
+            PKG="${PKG// /}"
+            [ -z "$PKG" ] && continue
+            # feeds install -a 会把包软链到 package/feeds/<feed>/<pkg>
+            TARGET=$(find package/feeds -maxdepth 2 -type d -name "$PKG" 2>/dev/null | head -1)
+            [ -z "$TARGET" ] && TARGET=$(find package -maxdepth 2 -type d -name "$PKG" -not -path "package/feeds/*" 2>/dev/null | head -1)
+            if [ -z "$TARGET" ]; then
+              echo "skip download: '$PKG' not found"
+              continue
+            fi
+            echo "Downloading sources for $PKG ($TARGET) ..."
+            make "$TARGET/download" V=s 2>&1 | tail -5 || echo "WARN: download failed for $PKG, will retry at compile"
+          done
+          du -sh dl/ 2>/dev/null || true
+
       - name: Show DL Size
         working-directory: ./openwrt
         run: du -sh dl/
+
+      - name: Report Cache Versions
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "=== Stored cache versions after update (wrt-*) ==="
+          curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-&per_page=100" \
+            | jq -r '.actions_caches | sort_by(.key) | .[]
+              | "  \(.key)  \(.size_in_bytes/1048576|floor)MB  created=\(.created_at)"'
 
       - name: Compile Packages
         id: compile

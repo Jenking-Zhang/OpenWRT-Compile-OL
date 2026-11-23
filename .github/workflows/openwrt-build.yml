@@ -589,17 +589,44 @@ jobs:
       - name: Compute Tools + Toolchian Cache Keys
         id: compute-cache-keys
         working-directory: ./openwrt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TARGET=$(grep -m1 -oP '^CONFIG_TARGET_\K[^=_]+(?==y)' "../myconfig/${{ env.CONFIG_FILE }}" || echo "unknown")
           SUBTARGET=$(grep -m1 -oP "^CONFIG_TARGET_${TARGET}_\K[^=_]+(?==y)" "../myconfig/${{ env.CONFIG_FILE }}" || echo "unknown")
           TOOLS_HASH=$(git archive HEAD tools 2>/dev/null | sha256sum | cut -c1-7 || echo "unknown")
           TC_HASH=$(git archive HEAD tools toolchain 2>/dev/null | sha256sum | cut -c1-7 || echo "unknown")
-          TOOLS_KEY="wrt-tools-${TOOLS_HASH}"
-          TC_KEY="wrt-toolchain-${TARGET}-${SUBTARGET}-${TC_HASH}"
-          echo "Tools cache key : ${TOOLS_KEY}"
-          echo "Toolchain cache key: ${TC_KEY}"
-          echo "tools_key=${TOOLS_KEY}" >> "$GITHUB_OUTPUT"
-          echo "tc_key=${TC_KEY}" >> "$GITHUB_OUTPUT"
+          TS=$(date -u +%Y%m%d-%H%M%S)
+
+          TOOLS_PREFIX="wrt-tools-${TOOLS_HASH}"
+          TC_PREFIX="wrt-toolchain-${TARGET}-${SUBTARGET}-${TC_HASH}"
+          TOOLS_SAVE_KEY="${TOOLS_PREFIX}-${TS}"
+          TC_SAVE_KEY="${TC_PREFIX}-${TS}"
+
+          # 恢复用: 动态取该前缀下 created_at 最新的一版
+          TJ=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-tools-&per_page=100")
+          CJ=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-toolchain-&per_page=100")
+          TOOLS_RESTORE_KEY=$(echo "$TJ" | jq -r --arg p "${TOOLS_PREFIX}-" '[.actions_caches[] | select(.key | startswith($p))] | sort_by(.created_at) | reverse | .[0].key // empty')
+          TC_RESTORE_KEY=$(echo "$CJ" | jq -r --arg p "${TC_PREFIX}-" '[.actions_caches[] | select(.key | startswith($p))] | sort_by(.created_at) | reverse | .[0].key // empty')
+          [ -z "$TOOLS_RESTORE_KEY" ] && TOOLS_RESTORE_KEY="${TOOLS_PREFIX}"
+          [ -z "$TC_RESTORE_KEY" ] && TC_RESTORE_KEY="${TC_PREFIX}"
+
+          echo "=== Tools / Toolchain cache ==="
+          echo "  tools     prefix : ${TOOLS_PREFIX}"
+          echo "  tools     restore: ${TOOLS_RESTORE_KEY}"
+          echo "  tools     save   : ${TOOLS_SAVE_KEY}"
+          echo "  toolchain prefix : ${TC_PREFIX}"
+          echo "  toolchain restore: ${TC_RESTORE_KEY}"
+          echo "  toolchain save   : ${TC_SAVE_KEY}"
+
+          echo "tools_prefix=${TOOLS_PREFIX}" >> "$GITHUB_OUTPUT"
+          echo "tc_prefix=${TC_PREFIX}" >> "$GITHUB_OUTPUT"
+          echo "tools_restore_key=${TOOLS_RESTORE_KEY}" >> "$GITHUB_OUTPUT"
+          echo "tc_restore_key=${TC_RESTORE_KEY}" >> "$GITHUB_OUTPUT"
+          echo "tools_save_key=${TOOLS_SAVE_KEY}" >> "$GITHUB_OUTPUT"
+          echo "tc_save_key=${TC_SAVE_KEY}" >> "$GITHUB_OUTPUT"
 
       - name: Tools Cache Restore
         id: tools-restore
@@ -607,7 +634,7 @@ jobs:
         if: github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/restore@main
         with:
-          key: ${{ steps.compute-cache-keys.outputs.tools_key }}
+          key: ${{ steps.compute-cache-keys.outputs.tools_restore_key }}
           path: openwrt/staging_dir/host*
 
       - name: Toolchain Cache Restore
@@ -616,7 +643,7 @@ jobs:
         if: github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/restore@main
         with:
-          key: ${{ steps.compute-cache-keys.outputs.tc_key }}
+          key: ${{ steps.compute-cache-keys.outputs.tc_restore_key }}
           path: |
             openwrt/.ccache
             openwrt/staging_dir/tool*
@@ -635,10 +662,10 @@ jobs:
 
       - name: 保存 Tools Cache
         continue-on-error: true
-        if: success() && github.event.inputs.enable_ccache != 'false' && steps.tools-restore.outputs.cache-hit != 'true'
+        if: success() && github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/save@main
         with:
-          key: ${{ steps.compute-cache-keys.outputs.tools_key }}
+          key: ${{ steps.compute-cache-keys.outputs.tools_save_key }}
           path: openwrt/staging_dir/host*
 
       - name: 处理 Toolchain Cache
@@ -655,13 +682,51 @@ jobs:
 
       - name: 保存 Toolchain Cache
         continue-on-error: true
-        if: success() && github.event.inputs.enable_ccache != 'false' && steps.tc-restore.outputs.cache-hit != 'true'
+        if: success() && github.event.inputs.enable_ccache != 'false'
         uses: actions/cache/save@main
         with:
-          key: ${{ steps.compute-cache-keys.outputs.tc_key }}
+          key: ${{ steps.compute-cache-keys.outputs.tc_save_key }}
           path: |
             openwrt/.ccache
             openwrt/staging_dir/tool*
+
+      - name: 清理 Tools/Toolchain Cache
+        continue-on-error: true
+        if: success() && github.event.inputs.enable_ccache != 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CUTOFF=$(date -d '30 days ago' +%s)
+          echo "Cutoff (30 days ago): ${CUTOFF}"
+
+          prune() {
+            LOCAL_PREFIX="$1"
+            API_PREFIX="$2"
+            echo "--- ${LOCAL_PREFIX}: 同前缀保留最新一版，其他前缀超过 30 天的删除 ---"
+            JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=${API_PREFIX}&per_page=100")
+            echo "$JSON" | jq -r --arg p "${LOCAL_PREFIX}-" --argjson cutoff "$CUTOFF" '
+              .actions_caches as $all
+              | ($all | map(select(.key | startswith($p))) | sort_by(.created_at) | reverse) as $same
+              | ($same[0].key // "") as $keep
+              | $all[]
+              | select(
+                  ((.key | startswith($p)) and (.key != $keep))
+                  or
+                  ((.key | startswith($p) | not) and ((.created_at | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) < $cutoff))
+                )
+              | "\(.id)\t\(.key)\t\(.created_at)"' \
+              | while IFS=$'\t' read -r ID KEY CREATED; do
+                  [ -z "$ID" ] && continue
+                  echo "  DEL ${KEY} (${CREATED})"
+                  curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                    "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
+                done
+          }
+
+          prune "${{ steps.compute-cache-keys.outputs.tools_prefix }}" "wrt-tools-"
+          prune "${{ steps.compute-cache-keys.outputs.tc_prefix }}" "wrt-toolchain-"
+          echo "cache prune done"
 
       - name: Report Cache Versions
         continue-on-error: true
@@ -681,42 +746,6 @@ jobs:
           df -h
           echo "bin/:"
           du -h --max-depth=1 bin/ 2>/dev/null | head -20
-
-      - name: Clean Old Caches (30-day policy)
-        continue-on-error: true
-        if: github.event.inputs.enable_ccache != 'false' && success()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          CUTOFF=$(date -d '30 days ago' +%s 2>/dev/null || date -v-30d +%s 2>/dev/null || echo "0")
-          echo "Cleaning wrt-* caches older than 30 days..."
-          echo "Cutoff timestamp: ${CUTOFF}"
-
-          PAGE=1
-          while true; do
-            JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100&page=${PAGE}")
-            LINES=$(echo "$JSON" | jq -r '.actions_caches[]? | "\(.id)\t\(.key)\t\(.created_at)"' 2>/dev/null)
-            [ -z "$LINES" ] && break
-
-            echo "$LINES" | while IFS=$'\t' read -r ID KEY CREATED; do
-              case "$KEY" in
-                wrt-tools-*|wrt-toolchain-*) ;;
-                *) continue ;;
-              esac
-              TS=$(date -d "$CREATED" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$CREATED" +%s 2>/dev/null || echo "0")
-              if [ "$TS" -lt "$CUTOFF" ] 2>/dev/null; then
-                SIZE=$(curl -s -H "Authorization: token $GH_TOKEN" "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" | jq -r '.size_in_bytes // 0')
-                echo "  DEL   $KEY  ($(( SIZE / 1048576 )) MB, $(date -d @$TS +%Y-%m-%d))"
-                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
-                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
-              fi
-            done
-
-            PAGE=$((PAGE + 1))
-            [ "$PAGE" -gt 10 ] && break
-          done
-          echo "Cache cleanup done"
 
       - name: Organize Artifacts
         id: organize

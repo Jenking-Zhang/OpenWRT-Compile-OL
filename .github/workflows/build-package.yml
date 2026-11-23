@@ -367,12 +367,19 @@ jobs:
         run: |
           INPUT_PKGS="${{ github.event.inputs.packages }}"
           IFS=',' read -ra PKGS <<< "$INPUT_PKGS"
+
+          # 包可能位于 package/feeds/<feed>/<pkg>、package/<分类>/<分类>/<pkg>（如 dropbear）或 feeds/<feed>/<pkg>
+          resolve_pkg() {
+            local pkg="$1" d
+            d=$(find package/feeds -maxdepth 2 -type d -name "$pkg" 2>/dev/null | head -1)
+            [ -z "$d" ] && d=$(find package -maxdepth 6 -type d -name "$pkg" -not -path "package/feeds/*" 2>/dev/null | head -1)
+            echo "$d"
+          }
+
           for PKG in "${PKGS[@]}"; do
             PKG="${PKG// /}"
             [ -z "$PKG" ] && continue
-            # feeds install -a 会把包软链到 package/feeds/<feed>/<pkg>
-            TARGET=$(find package/feeds -maxdepth 2 -type d -name "$PKG" 2>/dev/null | head -1)
-            [ -z "$TARGET" ] && TARGET=$(find package -maxdepth 2 -type d -name "$PKG" -not -path "package/feeds/*" 2>/dev/null | head -1)
+            TARGET=$(resolve_pkg "$PKG")
             if [ -z "$TARGET" ]; then
               echo "skip download: '$PKG' not found"
               continue
@@ -408,6 +415,14 @@ jobs:
           mkdir -p upload
           FAILED=()
 
+          # 包可能位于 package/feeds/<feed>/<pkg>、package/<分类>/<分类>/<pkg>（如 dropbear）或 feeds/<feed>/<pkg>
+          resolve_pkg() {
+            local pkg="$1" d
+            d=$(find package/feeds -maxdepth 2 -type d -name "$pkg" 2>/dev/null | head -1)
+            [ -z "$d" ] && d=$(find package -maxdepth 6 -type d -name "$pkg" -not -path "package/feeds/*" 2>/dev/null | head -1)
+            echo "$d"
+          }
+
           for PKG in "${PKGS[@]}"; do
             PKG="${PKG// /}"
             [ -z "$PKG" ] && continue
@@ -416,12 +431,10 @@ jobs:
             echo "  Compiling: $PKG"
             echo "=========================================="
 
-            # feeds install -a 会把包软链到 package/feeds/<feed>/<pkg>
-            TARGET=$(find package/feeds -maxdepth 2 -type d -name "$PKG" 2>/dev/null | head -1)
-            [ -z "$TARGET" ] && TARGET=$(find package -maxdepth 2 -type d -name "$PKG" -not -path "package/feeds/*" 2>/dev/null | head -1)
+            TARGET=$(resolve_pkg "$PKG")
 
             if [ -z "$TARGET" ]; then
-              echo "::warning::Package '$PKG' not found in package/, skipping."
+              echo "::error::Package '$PKG' not found in package/ or feeds/"
               FAILED+=("$PKG(not found)")
               continue
             fi
@@ -442,15 +455,18 @@ jobs:
           echo "  Results"
           echo "=========================================="
           if [ ${#FAILED[@]} -gt 0 ]; then
-            echo "FAILED: ${FAILED[*]}"
-            echo "Some packages failed, continuing..."
+            echo "::error::Failed packages: ${FAILED[*]}"
           fi
           echo "Collected .ipk files:"
           ls -lh upload/*.ipk 2>/dev/null || echo "  (none)"
 
           echo "fail_count=${#FAILED[@]}" >> "$GITHUB_OUTPUT"
 
+          # 有失败就让整个 job 失败（artifact 步骤用 if: always() 仍然会上传已成功的包）
+          [ ${#FAILED[@]} -eq 0 ] || exit 1
+
       - name: Upload Package Artifact
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: packages-${{ github.run_number }}

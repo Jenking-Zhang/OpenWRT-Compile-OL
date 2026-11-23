@@ -322,7 +322,8 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@main
         with:
-          key: wrt-dl
+          key: wrt-dl-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: wrt-dl
           path: openwrt/dl
 
       - name: Enable Feeds & Update
@@ -529,22 +530,35 @@ jobs:
         run: |
           make download -j16
 
-      - name: Pre-delete DL Cache Key
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "Pre-delete existing wrt-dl cache (rolling overwrite)..."
-          gh cache list --key wrt-dl --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>&1 || true
-          sleep 2
-
       - name: Save DL Cache
         continue-on-error: true
         if: success()
         uses: actions/cache/save@main
         with:
-          key: wrt-dl
+          key: wrt-dl-${{ github.run_id }}-${{ github.run_attempt }}
           path: openwrt/dl
+
+      - name: Prune Old DL Caches
+        continue-on-error: true
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Keep only the newest wrt-dl cache entry..."
+          JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100")
+          KEEP=$(echo "$JSON" | jq -r '[.actions_caches[] | select(.key | startswith("wrt-dl"))] | sort_by(.created_at) | reverse | .[0].id // empty')
+          [ -z "$KEEP" ] && { echo "no dl cache found"; exit 0; }
+          echo "Keep cache id=${KEEP}"
+          echo "$JSON" | jq -r --argjson keep "$KEEP" \
+            '.actions_caches[] | select(.key | startswith("wrt-dl")) | select(.id != $keep) | "\(.id)\t\(.key)\t\(.created_at)"' \
+            | while IFS=$'\t' read -r ID KEY CREATED; do
+                [ -z "$ID" ] && continue
+                echo "  DEL ${KEY} (${CREATED})"
+                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
+              done
+          echo "DL cache prune done"
 
       - name: Show DL Size
         working-directory: ./openwrt
@@ -674,7 +688,7 @@ jobs:
 
             echo "$LINES" | while IFS=$'\t' read -r ID KEY CREATED; do
               case "$KEY" in
-                wrt-tools-*|wrt-toolchain-*|wrt-dl) ;;
+                wrt-tools-*|wrt-toolchain-*|wrt-dl*) ;;
                 *) continue ;;
               esac
               TS=$(date -d "$CREATED" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$CREATED" +%s 2>/dev/null || echo "0")

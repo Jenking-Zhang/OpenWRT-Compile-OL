@@ -108,7 +108,8 @@ jobs:
         continue-on-error: true
         uses: actions/cache/restore@main
         with:
-          key: wrt-dl
+          key: wrt-dl-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: wrt-dl
           path: openwrt/dl
 
       - name: Feeds Update & Install

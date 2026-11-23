@@ -113,9 +113,11 @@ jobs:
           # 与 openwrt-build.yml 完全一致: 取 created_at 最新的一条 wrt-dl-<UTC时间戳>
           JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-dl&per_page=100")
+          echo "=== DL cache stored versions (before restore) ==="
+          echo "$JSON" | jq -r '.actions_caches | sort_by(.created_at) | .[]
+            | "  \(.key)  \(.size_in_bytes/1048576|floor)MB  created=\(.created_at)"'
           KEY=$(echo "$JSON" | jq -r '[.actions_caches[] | select(.key | startswith("wrt-dl"))] | sort_by(.created_at) | reverse | .[0].key // empty')
           [ -z "$KEY" ] && KEY="wrt-dl"
-          echo "DL cache candidates: $(echo "$JSON" | jq -r '.actions_caches | length')"
           echo "Restore DL cache key: ${KEY}"
           echo "dl_key=${KEY}" >> "$GITHUB_OUTPUT"
 

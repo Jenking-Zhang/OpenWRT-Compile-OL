@@ -231,6 +231,19 @@ jobs:
             openwrt/.ccache
             openwrt/staging_dir/tool*
 
+      - name: Touch Cache Stamps
+        if: success() && github.event.inputs.enable_ccache != 'false'
+        working-directory: ./openwrt
+        run: |
+          # 缓存里的 stamp 是旧时间戳，git clone 的源码 mtime 是刚刚，不 touch 会被判定需要重编
+          echo "Touching restored stamps..."
+          find ./staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | \
+              while read -r d; do find "$d" -type f -exec touch {} +; done
+          touch staging_dir/host/stamp/.tools_compile staging_dir/host/stamp/.tools_install 2>/dev/null || true
+          for d in staging_dir/toolchain-*/stamp; do
+            [ -d "$d" ] && touch "$d"/.toolchain_compile "$d"/.toolchain_install 2>/dev/null || true
+          done
+
       - name: Build Tools
         if: success() && steps.tools-restore.outputs.cache-hit != 'true'
         working-directory: ./openwrt

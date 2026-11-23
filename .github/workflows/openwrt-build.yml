@@ -318,12 +318,24 @@ jobs:
           echo "Source: ${REPO_URL} (${REPO_BRANCH})"
           echo "Hash: $(git rev-parse --short HEAD)"
 
+      - name: Find Latest DL Cache Key
+        id: find-dl
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          KEY=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100" \
+            | jq -r '[.actions_caches[] | select(.key | startswith("wrt-dl"))] | sort_by(.created_at) | reverse | .[0].key // empty')
+          [ -z "$KEY" ] && KEY="wrt-dl"
+          echo "Latest DL cache key: ${KEY}"
+          echo "dl_key=${KEY}" >> "$GITHUB_OUTPUT"
+
       - name: DL Restore
         continue-on-error: true
         uses: actions/cache/restore@main
         with:
-          key: wrt-dl-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: wrt-dl
+          key: ${{ steps.find-dl.outputs.dl_key }}
           path: openwrt/dl
 
       - name: Enable Feeds & Update

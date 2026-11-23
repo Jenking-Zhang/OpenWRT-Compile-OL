@@ -556,17 +556,21 @@ jobs:
 
       - name: Prune Old DL Caches
         continue-on-error: true
-        if: success()
+        if: success() && env.DL_KEY != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "Keep only the newest wrt-dl cache entry..."
+          echo "New DL key: ${DL_KEY}"
           JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-dl&per_page=100")
-          KEEP=$(echo "$JSON" | jq -r '[.actions_caches[] | select(.key | startswith("wrt-dl"))] | sort_by(.created_at) | reverse | .[0].key // empty')
-          [ -z "$KEEP" ] && { echo "no dl cache found"; exit 0; }
-          echo "Keep key: ${KEEP}"
-          echo "$JSON" | jq -r --arg keep "$KEEP" \
+
+          # 新版确认存在后才清理旧版，避免上传失败/列表滞后导致误删
+          if ! echo "$JSON" | jq -e --arg k "$DL_KEY" 'any(.actions_caches[]; .key == $k)' > /dev/null; then
+            echo "New cache '${DL_KEY}' not visible yet, skip prune."
+            exit 0
+          fi
+
+          echo "$JSON" | jq -r --arg keep "$DL_KEY" \
             '.actions_caches[] | select(.key | startswith("wrt-dl")) | select(.key != $keep) | "\(.id)\t\(.key)\t\(.created_at)"' \
             | while IFS=$'\t' read -r ID KEY CREATED; do
                 [ -z "$ID" ] && continue
@@ -574,7 +578,7 @@ jobs:
                 curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
                   "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
               done
-          echo "DL cache prune done"
+          echo "DL cache prune done (kept: ${DL_KEY})"
 
       - name: Show DL Size
         working-directory: ./openwrt

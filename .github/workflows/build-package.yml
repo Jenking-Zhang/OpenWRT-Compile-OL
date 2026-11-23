@@ -204,58 +204,41 @@ jobs:
             openwrt/.ccache
             openwrt/staging_dir/tool*
 
-      - name: Build Tools + Toolchain
+      - name: 处理 Tools Cache
+        if: success() && (github.event.inputs.enable_ccache == 'false' || steps.tools-restore.outputs.cache-hit != 'true')
         working-directory: ./openwrt
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TOOLS_HIT="${{ steps.tools-restore.outputs.cache-hit }}"
-          TC_HIT="${{ steps.tc-restore.outputs.cache-hit }}"
-          echo "Cache hit: tools=${TOOLS_HIT:-<step skipped>}, toolchain=${TC_HIT:-<step skipped>}"
-
+          echo "Tools cache hit='${{ steps.tools-restore.outputs.cache-hit }}' (empty = 缓存关闭或未命中) -> 编译 tools"
+          mkdir -p tmp && echo "1" > tmp/.build
           find ./staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | \
               while read -r d; do find "$d" -type f -exec touch {} +; done
+          make tools/compile -j$(nproc) || make -C tools compile -j$(nproc)
+          make tools/install || make -C tools install
+          du -sh staging_dir/host* 2>/dev/null || true
 
-          case "${TOOLS_HIT}-${TC_HIT}" in
-            true-true)
-              echo "Both caches restored, skip build."
-              ;;
-            true-false)
-              echo "Toolchain cache missed, building toolchain only..."
-              make toolchain/compile -j$(nproc) || make -C toolchain compile -j$(nproc)
-              make toolchain/install || make -C toolchain install
-              ;;
-            false-true)
-              echo "Tools cache missed, building tools only..."
-              make tools/compile -j$(nproc) || make -C tools compile -j$(nproc)
-              make tools/install || make -C tools install
-              ;;
-            *)
-              echo "Cache disabled or missed, building everything..."
-              make prepare -j$(nproc)
-              ;;
-          esac
-
-          du -sh staging_dir/host* staging_dir/tool* 2>/dev/null
-
-          if [ -n "${{ steps.compute-cache-keys.outputs.tools_key }}" ]; then
-            gh cache list --key "${{ steps.compute-cache-keys.outputs.tools_key }}" --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>/dev/null || true
-          fi
-          if [ -n "${{ steps.compute-cache-keys.outputs.tc_key }}" ]; then
-            gh cache list --key "${{ steps.compute-cache-keys.outputs.tc_key }}" --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>/dev/null || true
-          fi
-
-      - name: Save Tools Cache
+      - name: 保存 Tools Cache
         continue-on-error: true
-        if: github.event.inputs.enable_ccache != 'false' && success()
+        if: success() && github.event.inputs.enable_ccache != 'false' && steps.tools-restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@main
         with:
           key: ${{ steps.compute-cache-keys.outputs.tools_key }}
           path: openwrt/staging_dir/host*
 
-      - name: Save Toolchain Cache
+      - name: 处理 Toolchain Cache
+        if: success() && (github.event.inputs.enable_ccache == 'false' || steps.tc-restore.outputs.cache-hit != 'true')
+        working-directory: ./openwrt
+        run: |
+          echo "Toolchain cache hit='${{ steps.tc-restore.outputs.cache-hit }}' (empty = 缓存关闭或未命中) -> 编译 toolchain"
+          mkdir -p tmp && echo "1" > tmp/.build
+          find ./staging_dir -type d -name "stamp" -not -path "*target*" 2>/dev/null | \
+              while read -r d; do find "$d" -type f -exec touch {} +; done
+          make toolchain/compile -j$(nproc) || make -C toolchain compile -j$(nproc)
+          make toolchain/install || make -C toolchain install
+          du -sh staging_dir/tool* 2>/dev/null || true
+
+      - name: 保存 Toolchain Cache
         continue-on-error: true
-        if: github.event.inputs.enable_ccache != 'false' && success()
+        if: success() && github.event.inputs.enable_ccache != 'false' && steps.tc-restore.outputs.cache-hit != 'true'
         uses: actions/cache/save@main
         with:
           key: ${{ steps.compute-cache-keys.outputs.tc_key }}

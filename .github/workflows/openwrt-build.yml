@@ -788,7 +788,11 @@ jobs:
               -o -name "*.bin.asc" -o -name "*.trx.asc" \) \
               -exec cp -f {} upload/ \; 2>/dev/null || true
 
-          find ./bin/packages -type f -name "*.ipk" -exec cp -f {} upload/ \; 2>/dev/null || true
+          # 整个 packages 目录原样带出（保留架构/feed 层级，ipk 与 apk 都在里面）
+          if [ -d ./bin/packages ]; then
+            mkdir -p upload/packages
+            cp -a ./bin/packages/. upload/packages/ 2>/dev/null || true
+          fi
 
           find ./bin/targets -type f \( -name "*.buildinfo" -o -name "*.manifest" -o -name "*.sha256sums" \) \
               -exec cp -f {} upload/ \; 2>/dev/null || true
@@ -813,12 +817,14 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          PREFIX="firmware/${CONFIG_FILE}-"
-          echo "Cleaning up old releases matching tag prefix: ${PREFIX}"
+          BASE="firmware/${CONFIG_FILE}"
+          # 匹配 firmware/<cfg> 以及历史格式 firmware/<cfg>-<数字>
+          RE="^$(echo "$BASE" | sed 's/[][\.*^$+?(){}|]/\\&/g')(-[0-9]+)?$"
+          echo "Cleaning up old releases of this config: ${BASE}"
 
           OLD_TAGS=$(curl -sH "Authorization: token $GH_TOKEN" \
             "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" | \
-            jq -r --arg p "$PREFIX" '.[] | select(.tag_name | startswith($p)) | .tag_name')
+            jq -r --arg re "$RE" '.[] | select(.tag_name | test($re)) | .tag_name')
 
           if [ -z "$OLD_TAGS" ]; then
             echo "No old releases found."
@@ -842,15 +848,14 @@ jobs:
         if: env.DO_RELEASE == 'true' && success()
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: firmware/${{ matrix.config }}-${{ github.run_number }}
-          name: '${{ matrix.config }} | ${{ env.SOURCE_LABEL }} | Run #${{ github.run_number }}'
+          tag_name: firmware/${{ matrix.config }}
+          name: '${{ matrix.config }} | ${{ env.SOURCE_LABEL }}'
           files: openwrt/upload/*
           body: |
             **Config**: `${{ matrix.config }}`
             **Source**: `${{ env.REPO_URL }}`
             **Branch**: `${{ env.REPO_BRANCH }}`
             **Kernel**: `${{ steps.organize.outputs.KVER || 'unknown' }}`
-            **Run**: #${{ github.run_number }}
             **Commit**: ${{ steps.clone.outputs.WRT_HASH }}
             **Date**: ${{ env.RELEASE_DATE }}
           draft: false

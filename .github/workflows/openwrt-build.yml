@@ -324,11 +324,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          KEY=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100" \
-            | jq -r '[.actions_caches[] | select(.key | startswith("wrt-dl"))] | sort_by(.created_at) | reverse | .[0].key // empty')
+          # DL 缓存只有一条滚动链: wrt-dl-<UTC时间戳>，每次取 created_at 最新的一条
+          JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-dl&per_page=100")
+          KEY=$(echo "$JSON" | jq -r '[.actions_caches[] | select(.key | startswith("wrt-dl"))] | sort_by(.created_at) | reverse | .[0].key // empty')
           [ -z "$KEY" ] && KEY="wrt-dl"
-          echo "Latest DL cache key: ${KEY}"
+          echo "DL cache candidates: $(echo "$JSON" | jq -r '.actions_caches | length')"
+          echo "Restore DL cache key: ${KEY}"
           echo "dl_key=${KEY}" >> "$GITHUB_OUTPUT"
 
       - name: DL Restore
@@ -540,6 +542,8 @@ jobs:
       - name: Download Packages
         working-directory: ./openwrt
         run: |
+          # 本次保存 key: wrt-dl-<UTC时间戳>，每次都是新条目 -> created_at 最新 -> 下次恢复即最新
+          echo "DL_KEY=wrt-dl-$(date -u +%Y%m%d-%H%M%S)" >> "$GITHUB_ENV"
           make download -j16
 
       - name: Save DL Cache
@@ -547,7 +551,7 @@ jobs:
         if: success()
         uses: actions/cache/save@main
         with:
-          key: wrt-dl-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ${{ env.DL_KEY }}
           path: openwrt/dl
 
       - name: Prune Old DL Caches
@@ -558,12 +562,12 @@ jobs:
         run: |
           echo "Keep only the newest wrt-dl cache entry..."
           JSON=$(curl -s -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?per_page=100")
-          KEEP=$(echo "$JSON" | jq -r '[.actions_caches[] | select(.key | startswith("wrt-dl"))] | sort_by(.created_at) | reverse | .[0].id // empty')
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches?key=wrt-dl&per_page=100")
+          KEEP=$(echo "$JSON" | jq -r '[.actions_caches[] | select(.key | startswith("wrt-dl"))] | sort_by(.created_at) | reverse | .[0].key // empty')
           [ -z "$KEEP" ] && { echo "no dl cache found"; exit 0; }
-          echo "Keep cache id=${KEEP}"
-          echo "$JSON" | jq -r --argjson keep "$KEEP" \
-            '.actions_caches[] | select(.key | startswith("wrt-dl")) | select(.id != $keep) | "\(.id)\t\(.key)\t\(.created_at)"' \
+          echo "Keep key: ${KEEP}"
+          echo "$JSON" | jq -r --arg keep "$KEEP" \
+            '.actions_caches[] | select(.key | startswith("wrt-dl")) | select(.key != $keep) | "\(.id)\t\(.key)\t\(.created_at)"' \
             | while IFS=$'\t' read -r ID KEY CREATED; do
                 [ -z "$ID" ] && continue
                 echo "  DEL ${KEY} (${CREATED})"
@@ -700,7 +704,7 @@ jobs:
 
             echo "$LINES" | while IFS=$'\t' read -r ID KEY CREATED; do
               case "$KEY" in
-                wrt-tools-*|wrt-toolchain-*|wrt-dl*) ;;
+                wrt-tools-*|wrt-toolchain-*) ;;
                 *) continue ;;
               esac
               TS=$(date -d "$CREATED" +%s 2>/dev/null || date -j -f "%Y-%m-%dT%H:%M:%SZ" "$CREATED" +%s 2>/dev/null || echo "0")

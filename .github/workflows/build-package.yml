@@ -442,8 +442,9 @@ jobs:
             echo "Found at: $TARGET"
             if make "$TARGET/compile" V=s 2>&1; then
               echo "OK: $PKG compiled"
-              find bin/ -name "${PKG}*.ipk" -exec cp -f {} upload/ \; 2>/dev/null || true
-              find bin/ -name "*.ipk" -mmin -15 -exec cp -f {} upload/ \; 2>/dev/null || true
+              # 新版 OpenWrt/immortalwrt 用 apk，旧版用 ipk，两种都收
+              find bin/ -type f \( -name "${PKG}*.ipk" -o -name "${PKG}*.apk" \) -exec cp -f {} upload/ \; 2>/dev/null || true
+              find bin/ -type f \( -name "*.ipk" -o -name "*.apk" \) -mmin -15 -exec cp -f {} upload/ \; 2>/dev/null || true
             else
               echo "FAILED: $PKG"
               FAILED+=("$PKG")
@@ -457,8 +458,8 @@ jobs:
           if [ ${#FAILED[@]} -gt 0 ]; then
             echo "::error::Failed packages: ${FAILED[*]}"
           fi
-          echo "Collected .ipk files:"
-          ls -lh upload/*.ipk 2>/dev/null || echo "  (none)"
+          echo "Collected packages:"
+          ls -lh upload/ 2>/dev/null | tail -n +2 || echo "  (none)"
 
           echo "fail_count=${#FAILED[@]}" >> "$GITHUB_OUTPUT"
 
@@ -470,7 +471,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: packages-${{ github.run_number }}
-          path: openwrt/upload/*.ipk
+          path: |
+            openwrt/upload/*.ipk
+            openwrt/upload/*.apk
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 30
@@ -488,7 +491,9 @@ jobs:
         with:
           tag_name: package/${{ github.run_number }}
           name: 'Packages: ${{ env.PKG_LIST }} | ${{ env.SOURCE_OWNER }} | Run #${{ github.run_number }}'
-          files: openwrt/upload/*.ipk
+          files: |
+            openwrt/upload/*.ipk
+            openwrt/upload/*.apk
           body: |
             **Packages**: `${{ env.PKG_LIST }}`
             **Source**: `${{ env.REPO_URL }}`

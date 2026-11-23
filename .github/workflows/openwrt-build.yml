@@ -528,11 +528,19 @@ jobs:
         working-directory: ./openwrt
         run: |
           make download -j16
-          gh cache list --key wrt-dl --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>/dev/null || true
+
+      - name: Pre-delete DL Cache Key
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Pre-delete existing wrt-dl cache (rolling overwrite)..."
+          gh cache list --key wrt-dl --limit 1 2>/dev/null | tail -1 | awk '{print $1}' | xargs -r gh cache delete 2>&1 || true
+          sleep 2
 
       - name: Save DL Cache
         continue-on-error: true
-        if: github.event.inputs.enable_ccache != 'false' && success()
+        if: success()
         uses: actions/cache/save@main
         with:
           key: wrt-dl

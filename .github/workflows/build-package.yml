@@ -130,10 +130,28 @@ jobs:
             cp -f "myconfig/${CFG}" openwrt/.config
           else
             echo "No base config, using default (x86_64 generic)"
-            cd openwrt
-            make defconfig
           fi
           cd openwrt && make defconfig
+
+      - name: Pre-download Package Sources
+        working-directory: ./openwrt
+        run: |
+          INPUT_PKGS="${{ github.event.inputs.packages }}"
+          IFS=',' read -ra PKGS <<< "$INPUT_PKGS"
+          for PKG in "${PKGS[@]}"; do
+            PKG="${PKG// /}"
+            [ -z "$PKG" ] && continue
+            # feeds install -a 会把包软链到 package/feeds/<feed>/<pkg>
+            TARGET=$(find package/feeds -maxdepth 2 -type d -name "$PKG" 2>/dev/null | head -1)
+            [ -z "$TARGET" ] && TARGET=$(find package -maxdepth 2 -type d -name "$PKG" -not -path "package/feeds/*" 2>/dev/null | head -1)
+            if [ -z "$TARGET" ]; then
+              echo "skip download: '$PKG' not found"
+              continue
+            fi
+            echo "Downloading sources for $PKG ($TARGET) ..."
+            make "$TARGET/download" V=s 2>&1 | tail -5 || echo "WARN: download failed for $PKG, will retry at compile"
+          done
+          du -sh dl/ 2>/dev/null || true
 
       - name: Compute Cache Keys
         id: compute-cache-keys
@@ -252,25 +270,23 @@ jobs:
             echo "  Compiling: $PKG"
             echo "=========================================="
 
-            # 在 feeds/ 和 package/ 里找
-            PKG_DIR=$(find feeds/ package/ -maxdepth 5 -type d -name "$PKG" 2>/dev/null | head -1)
-            if [ -z "$PKG_DIR" ]; then
-              # 试试 Makefile 里 PKG_NAME 匹配
-              PKG_DIR=$(grep -rl "PKG_NAME:=${PKG}$" feeds/ package/ --include=Makefile 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
-            fi
+            # feeds install -a 会把包软链到 package/feeds/<feed>/<pkg>
+            TARGET=$(find package/feeds -maxdepth 2 -type d -name "$PKG" 2>/dev/null | head -1)
+            [ -z "$TARGET" ] && TARGET=$(find package -maxdepth 2 -type d -name "$PKG" -not -path "package/feeds/*" 2>/dev/null | head -1)
 
-            if [ -z "$PKG_DIR" ]; then
-              echo "::warning::Package '$PKG' not found in feeds/ or package/, skipping."
+            if [ -z "$TARGET" ]; then
+              echo "::warning::Package '$PKG' not found in package/, skipping."
               FAILED+=("$PKG(not found)")
               continue
             fi
 
-            echo "Found at: $PKG_DIR"
-            if make -C "$PKG_DIR" compile V=s 2>&1; then
-              echo "✅ $PKG compiled OK"
-              find bin/ -name "*.ipk" -newer "$PKG_DIR/Makefile" 2>/dev/null -exec cp -f {} upload/ \; || true
+            echo "Found at: $TARGET"
+            if make "$TARGET/compile" V=s 2>&1; then
+              echo "OK: $PKG compiled"
+              find bin/ -name "${PKG}*.ipk" -exec cp -f {} upload/ \; 2>/dev/null || true
+              find bin/ -name "*.ipk" -mmin -15 -exec cp -f {} upload/ \; 2>/dev/null || true
             else
-              echo "❌ $PKG FAILED"
+              echo "FAILED: $PKG"
               FAILED+=("$PKG")
             fi
           done

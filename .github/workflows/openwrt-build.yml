@@ -2,6 +2,7 @@ name: OpenWRT-Build
 
 permissions:
   contents: write
+  actions: write   # 删除旧缓存条目 (DELETE /actions/caches/{id})
 
 on:
   workflow_dispatch:
@@ -665,8 +666,9 @@ jobs:
             | while IFS=$'\t' read -r ID KEY CREATED; do
                 [ -z "$ID" ] && continue
                 echo "  DEL ${KEY} (${CREATED})"
-                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
-                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}")
+                [ "$CODE" = "204" ] || echo "  WARN: delete ${KEY} failed (HTTP ${CODE})"
               done
           echo "Tools prune done"
 
@@ -717,8 +719,9 @@ jobs:
             | while IFS=$'\t' read -r ID KEY CREATED; do
                 [ -z "$ID" ] && continue
                 echo "  DEL ${KEY} (${CREATED})"
-                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
-                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}")
+                [ "$CODE" = "204" ] || echo "  WARN: delete ${KEY} failed (HTTP ${CODE})"
               done
           echo "Toolchain prune done"
 
@@ -757,8 +760,9 @@ jobs:
             | while IFS=$'\t' read -r ID KEY CREATED; do
                 [ -z "$ID" ] && continue
                 echo "  DEL ${KEY} (${CREATED})"
-                curl -s -X DELETE -H "Authorization: token $GH_TOKEN" \
-                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}" > /dev/null
+                CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE -H "Authorization: token $GH_TOKEN" \
+                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/caches/${ID}")
+                [ "$CODE" = "204" ] || echo "  WARN: delete ${KEY} failed (HTTP ${CODE})"
               done
           echo "DL prune done"
 

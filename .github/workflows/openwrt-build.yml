@@ -784,6 +784,15 @@ jobs:
             tar -czf "upload/packages-${{ matrix.config }}.tar.gz" -C bin packages 2>/dev/null || true
           fi
 
+          # 固件镜像单独挑出来，方便直接下载刷机
+          find ./bin/targets -type f \( -name "*.bin" -o -name "*.trx" -o -name "*.itb" \
+              -o -name "*.img" -o -name "*.ubi" -o -name "*.ufs" -o -name "*.sdcard" \
+              -o -name "*.rootfs" -o -name "*.sysupgrade" -o -name "*.factory" \
+              -o -name "*.combined" -o -name "*.ext4" -o -name "*.squashfs" \
+              -o -name "*.gz" -o -name "*.xz" -o -name "*.zip" \
+              -o -name "*.bin.asc" -o -name "*.trx.asc" \) \
+              -exec cp -f {} upload/ \; 2>/dev/null || true
+
           # 元数据留一份散文件，方便直接查看
           find ./bin/targets -type f \( -name "*.buildinfo" -o -name "*.manifest" -o -name "*.sha256sums" \) \
               -exec cp -f {} upload/ \; 2>/dev/null || true
